@@ -1,16 +1,136 @@
+
 # WikiReach
 
-A Python library for exploring and traversing relationships in Wikidata.
+WikiReach is a Python library for exploring and traversing relationships in Wikidata.
 
-## Development
+The project aims to provide a simple Python interface for working with Wikidata entities, properties, and relationships without requiring users to work directly with raw Wikidata API responses or SPARQL for common graph operations.
 
-Install the project with its development dependencies:
+## Status
+
+WikiReach is in early development.
+
+The current repository contains the initial package structure, development tooling, and tests. Wikidata functionality has not been implemented yet.
+
+## Planned Features
+
+WikiReach will focus on graph-based exploration of Wikidata.
+
+Planned features include:
+
+* Search for Wikidata entities by name
+* Fetch entities by Wikidata ID
+* Access clean entity metadata
+* Resolve Wikidata property and entity labels
+* Represent relationships between entities
+* Find neighbouring entities
+* Traverse relationships to a configurable depth
+* Find paths between two entities
+* Find shared connections between entities
+* Filter traversal by Wikidata property
+* Cache repeated Wikidata requests
+
+The library will focus on Wikidata relationship traversal rather than general Wikipedia content access.
+
+## Example
+
+The intended API will look similar to this:
+
+```python
+from wikireach import WikiReach
+
+wiki = WikiReach()
+
+einstein = wiki.search("Albert Einstein")
+
+print(einstein.id)
+print(einstein.label)
+print(einstein.description)
+
+relations = wiki.neighbors(einstein)
+
+path = wiki.path(
+    "Albert Einstein",
+    "Manhattan Project",
+)
+```
+
+The exact API may change while the project remains in early development.
+
+## Requirements
+
+* Python 3.11 or later
+
+## Development Installation
+
+Clone the repository and create a virtual environment:
+
+```bash
+python -m venv .venv
+```
+
+Activate the environment.
+
+On macOS and Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+On Windows:
+
+```bash
+.venv\Scripts\activate
+```
+
+Install WikiReach in editable mode with the development dependencies:
 
 ```bash
 python -m pip install -e ".[dev]"
 ```
 
-Run the checks:
+Editable installation allows changes in `src/wikireach` to apply without reinstalling the package.
+
+## Project Structure
+
+```text
+.
+├── .gitignore
+├── LICENSE
+├── README.md
+├── pyproject.toml
+├── src/
+│   └── wikireach/
+│       ├── __init__.py
+│       ├── client.py
+│       ├── entity.py
+│       └── relation.py
+└── tests/
+    └── test_import.py
+```
+
+The project uses a `src` layout. The `wikireach` package lives inside `src/wikireach`.
+
+## Development Commands
+
+Run the test suite:
+
+```bash
+pytest
+```
+
+Run Ruff:
+
+```bash
+ruff check .
+```
+
+Run mypy:
+
+```bash
+mypy .
+```
+
+Run all checks before committing changes:
 
 ```bash
 pytest
@@ -18,3 +138,79 @@ ruff check .
 mypy .
 ```
 
+## Design Goals
+
+WikiReach should provide a small and predictable public API.
+
+The library should:
+
+* Hide unnecessary Wikidata API response structure
+* Use clear Python objects for entities and relationships
+* Preserve Wikidata IDs when they are useful
+* Use type hints throughout the public API
+* Avoid unnecessary dependencies
+* Keep network access separate from entity models
+* Support testing without requiring live Wikidata requests
+
+WikiReach should not attempt to replace the full Wikidata API or SPARQL.
+
+Users who need complex data queries should continue to use Wikidata Query Service or the official APIs directly.
+
+## Development Roadmap
+
+### 0.1
+
+Initial Wikidata access:
+
+* Entity search
+* Entity model
+* Basic API client
+* Error handling
+* Tests using mocked HTTP requests
+
+### 0.2
+
+Relationship support:
+
+* Fetch entity claims
+* Resolve property labels
+* Resolve related entity labels
+* Relation model
+* Entity neighbours
+
+### 0.3
+
+Graph traversal:
+
+* Configurable traversal depth
+* Path finding
+* Property filtering
+* Shared connections
+
+### Later
+
+Possible future work includes:
+
+* Request caching
+* Async API support
+* Additional graph algorithms
+* Wikipedia page metadata
+* Command-line tools
+
+## Contributing
+
+WikiReach is currently in early development.
+
+Issues and pull requests are welcome as the public API develops.
+
+Before submitting changes, run:
+
+```bash
+pytest
+ruff check .
+mypy .
+```
+
+## License
+
+WikiReach uses the MIT License. See `LICENSE` for details.
