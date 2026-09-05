@@ -28,14 +28,15 @@ Claims: TypeAlias = dict[str, list[Claim]]
 PropertyFilter: TypeAlias = Collection[str] | None
 
 
+# Synchronous client for searching and exploring Wikidata.
 class WikiReach:
-    # Synchronous client for searching and exploring Wikidata.
-
     _ENTITY_ID_PATTERN = re.compile(r"Q[1-9]\d*$")
     _PROPERTY_ID_PATTERN = re.compile(r"P[1-9]\d*$")
 
+    # Basic lookup API.
+
+    # Return the best English Wikidata entity matching the query.
     def search(self, query: str) -> Entity:
-        # Return the best English Wikidata entity matching the query.
         if not query.strip():
             raise InvalidQueryError("Search query must not be empty.")
 
@@ -50,8 +51,8 @@ class WikiReach:
             )
         )
 
+    # Return an English Wikidata entity for the given Q-ID.
     def entity(self, entity_id: str) -> Entity:
-        # Return an English Wikidata entity for the given Q-ID.
         entity_id = self._resolve_entity_id(entity_id)
 
         return self._entity_from_lookup_payload(
@@ -68,8 +69,8 @@ class WikiReach:
             entity_id,
         )
 
+    # Return typed claims keyed by Wikidata property ID.
     def claims(self, entity_id: str) -> Claims:
-        # Return typed claims keyed by Wikidata property ID.
         entity_id = self._resolve_entity_id(entity_id)
 
         return self._claims_from_payload(
@@ -84,8 +85,8 @@ class WikiReach:
             entity_id,
         )
 
+    # Return English metadata for a Wikidata property ID.
     def property(self, property_id: str) -> Property:
-        # Return English metadata for a Wikidata property ID.
         self._validate_property_id(property_id)
         return self._property_from_lookup_payload(
             get_payload(
@@ -101,6 +102,7 @@ class WikiReach:
             property_id,
         )
 
+    # Return outgoing item-valued relations, optionally filtered by property.
     def relations(
         self,
         entity_id: str,
@@ -108,14 +110,13 @@ class WikiReach:
         resolve_labels: bool = False,
         properties: Collection[str] | None = None,
     ) -> list[Relation]:
-        # Return outgoing item-valued relations, optionally filtered by property.
         allowed_properties = self._validate_properties(properties)
         return self._relations(entity_id, allowed_properties, resolve_labels)
 
+    # Return unique outgoing neighbor entities in first-seen relation order.
     def neighbors(
         self, entity_id: str, *, properties: Collection[str] | None = None
     ) -> list[Entity]:
-        # Return unique outgoing neighbor entities in first-seen relation order.
         allowed_properties = self._validate_properties(properties)
         target_ids = list(
             dict.fromkeys(
@@ -125,6 +126,7 @@ class WikiReach:
         )
         return self._entities(target_ids)
 
+    # Return outgoing targets shared by two source entities.
     def connections(
         self,
         left_id: str,
@@ -132,7 +134,6 @@ class WikiReach:
         *,
         properties: Collection[str] | None = None,
     ) -> list[Connection]:
-        # Return outgoing targets shared by two source entities.
         left_id = self._resolve_entity_id(left_id)
         right_id = self._resolve_entity_id(right_id)
         allowed_properties = self._validate_properties(properties)
@@ -154,23 +155,25 @@ class WikiReach:
             for entity in self._entities(shared_ids)
         ]
 
+    # Relation helpers.
+
+    # Group relations by target while retaining relation and target order.
     @staticmethod
     def _relations_by_target(
         relations: list[Relation],
     ) -> dict[str, list[Relation]]:
-        # Group relations by target while retaining relation and target order.
         grouped: dict[str, list[Relation]] = {}
         for relation in relations:
             grouped.setdefault(relation.target_id, []).append(relation)
         return grouped
 
+    # Build item-valued relations using an already validated property filter.
     def _relations(
         self,
         entity_id: str,
         allowed_properties: set[str] | None,
         resolve_labels: bool = False,
     ) -> list[Relation]:
-        # Build item-valued relations using an already validated property filter.
         entity_id = self._resolve_entity_id(entity_id)
         relations: list[Relation] = []
         for property_id, values in self.claims(entity_id).items():
@@ -188,6 +191,9 @@ class WikiReach:
                     )
         return self._relations_with_labels(relations) if resolve_labels else relations
 
+    # Graph exploration API.
+
+    # Traverse outgoing item-to-item relations breadth-first to the given depth.
     def traverse(
         self,
         entity_id: str,
@@ -195,7 +201,6 @@ class WikiReach:
         *,
         properties: Collection[str] | None = None,
     ) -> TraversalResult:
-        # Traverse outgoing item-to-item relations breadth-first to the given depth.
         entity_id = self._resolve_entity_id(entity_id)
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
             raise InvalidDepthError(
@@ -234,6 +239,7 @@ class WikiReach:
             relations=tuple(relations),
         )
 
+    # Find the shortest outgoing relation path within the maximum number of edges.
     def path(
         self,
         source_id: str,
@@ -242,7 +248,6 @@ class WikiReach:
         *,
         properties: Collection[str] | None = None,
     ) -> PathResult:
-        # Find the shortest outgoing relation path within the maximum number of edges.
         source_id = self._resolve_entity_id(source_id)
         target_id = self._resolve_entity_id(target_id)
         if (
@@ -308,8 +313,10 @@ class WikiReach:
             )
         return PathResult(entities=tuple(entities), relations=tuple(path_relations))
 
+    # Input validation and normalization.
+
+    # Validate a Wikidata item identifier.
     def _validate_entity_id(self, entity_id: str) -> None:
-        # Validate a Wikidata item identifier.
         if not isinstance(entity_id, str) or not self._ENTITY_ID_PATTERN.fullmatch(
             entity_id
         ):
@@ -317,14 +324,16 @@ class WikiReach:
                 "Entity ID must be a Wikidata Q-ID such as 'Q937'."
             )
 
+    # Resolve ordinary text through search while preserving strict ID validation.
     def _resolve_entity_id(self, entity_id: str) -> str:
-        # Resolve ordinary text through search while preserving strict ID validation.
         if not isinstance(entity_id, str):
             raise InvalidEntityIdError(
                 "Entity ID must be a Wikidata Q-ID such as 'Q937'."
             )
-        if not entity_id.strip() or entity_id.isdecimal() or re.fullmatch(
-            r"[QP]\s.*", entity_id
+        if (
+            not entity_id.strip()
+            or entity_id.isdecimal()
+            or re.fullmatch(r"[QP]\s.*", entity_id)
         ):
             self._validate_entity_id(entity_id)
         if self._ENTITY_ID_PATTERN.fullmatch(entity_id):
@@ -355,8 +364,8 @@ class WikiReach:
             )
         return property_ids
 
+    # Validate a Wikidata property identifier.
     def _validate_property_id(self, property_id: str) -> None:
-        # Validate a Wikidata property identifier.
         if not isinstance(property_id, str) or not self._PROPERTY_ID_PATTERN.fullmatch(
             property_id
         ):
@@ -364,8 +373,8 @@ class WikiReach:
                 "Property ID must be a Wikidata P-ID such as 'P31'."
             )
 
+    # Return a valid target Q-ID when a claim value references an item.
     def _entity_target_id(self, claim: Claim) -> str | None:
-        # Return a valid target Q-ID when a claim value references an item.
         if not isinstance(claim.value, EntityValue):
             return None
         if claim.value.entity_type != "item":
@@ -374,8 +383,10 @@ class WikiReach:
             return None
         return claim.value.id
 
+    # Batched metadata resolution.
+
+    # Add optional English labels to relations with a single set of batches.
     def _relations_with_labels(self, relations: list[Relation]) -> list[Relation]:
-        # Add optional English labels to relations with a single set of batches.
         if not relations:
             return []
 
@@ -397,8 +408,8 @@ class WikiReach:
             for relation in relations
         ]
 
+    # Resolve English labels for unique entity and property IDs in batches.
     def _labels(self, ids: set[str]) -> dict[str, str | None]:
-        # Resolve English labels for unique entity and property IDs in batches.
         labels: dict[str, str | None] = {}
         sorted_ids = sorted(ids)
         for start in range(0, len(sorted_ids), BATCH_SIZE):
@@ -416,8 +427,8 @@ class WikiReach:
             labels.update(self._labels_from_payload(payload, batch))
         return labels
 
+    # Resolve entity metadata in batches while preserving the supplied order.
     def _entities(self, entity_ids: list[str]) -> list[Entity]:
-        # Resolve entity metadata in batches while preserving the supplied order.
         entities: list[Entity] = []
         for start in range(0, len(entity_ids), BATCH_SIZE):
             batch = entity_ids[start : start + BATCH_SIZE]
@@ -434,6 +445,9 @@ class WikiReach:
             entities.extend(self._entities_from_payload(payload, batch))
         return entities
 
+    # Wikidata response parsing.
+
+    # Convert a search response into an Entity.
     @staticmethod
     def _entity_from_search_payload(payload: object) -> Entity:
         if not isinstance(payload, dict):
@@ -463,9 +477,9 @@ class WikiReach:
 
         return Entity(id=entity_id, label=label, description=description)
 
+    # Convert a wbgetentities response into an Entity.
     @staticmethod
     def _entity_from_lookup_payload(payload: object, entity_id: str) -> Entity:
-        # Convert a wbgetentities response into an Entity.
         result = WikiReach._entity_data_from_payload(payload, entity_id)
 
         label = WikiReach._localized_value(result.get("labels"), "label")
@@ -475,9 +489,9 @@ class WikiReach:
         )
         return Entity(id=entity_id, label=label, description=description)
 
+    # Extract raw main-snak values from a wbgetentities response.
     @staticmethod
     def _claims_from_payload(payload: object, entity_id: str) -> Claims:
-        # Extract raw main-snak values from a wbgetentities response.
         result = WikiReach._entity_data_from_payload(payload, entity_id)
         claims = result.get("claims")
         if not isinstance(claims, dict):
@@ -495,9 +509,9 @@ class WikiReach:
             ]
         return clean_claims
 
+    # Convert a wbgetentities response into a Property.
     @staticmethod
     def _property_from_lookup_payload(payload: object, property_id: str) -> Property:
-        # Convert a wbgetentities response into a Property.
         result = WikiReach._entity_data_from_payload(payload, property_id)
         datatype = result.get("datatype")
         if not isinstance(datatype, str):
@@ -601,9 +615,11 @@ class WikiReach:
             entities.append(Entity(id=entity_id, label=label, description=description))
         return entities
 
+    # Typed claim value conversion.
+
+    # Convert a raw Wikidata statement into a typed Claim.
     @staticmethod
     def _claim_from_payload(claim: object, property_id: str, source_id: str) -> Claim:
-        # Convert a raw Wikidata statement into a typed Claim.
         if not isinstance(claim, dict):
             raise WikiReachResponseError("Wikidata entity has an invalid claim.")
         snak = claim.get("mainsnak")
@@ -632,9 +648,9 @@ class WikiReach:
             value_type=value_type or "unknown",
         )
 
+    # Convert supported raw Wikidata values to immutable typed models.
     @staticmethod
     def _typed_value(value: object, value_type: str | None) -> object:
-        # Convert supported raw Wikidata values to immutable typed models.
         if value_type == "wikibase-entityid":
             if not isinstance(value, dict):
                 raise WikiReachResponseError("Wikidata entity value is invalid.")
@@ -649,9 +665,9 @@ class WikiReach:
             return WikiReach._quantity_value(value)
         return value
 
+    # Parse a Wikidata time value.
     @staticmethod
     def _date_value(value: object) -> DateValue:
-        # Parse a Wikidata time value.
         if not isinstance(value, dict):
             raise WikiReachResponseError("Wikidata time value is invalid.")
         raw_time = value.get("time")
@@ -681,9 +697,9 @@ class WikiReach:
             calendar_model=calendar_model if isinstance(calendar_model, str) else None,
         )
 
+    # Parse a Wikidata quantity value.
     @staticmethod
     def _quantity_value(value: object) -> QuantityValue:
-        # Parse a Wikidata quantity value.
         if not isinstance(value, dict):
             raise WikiReachResponseError("Wikidata quantity value is invalid.")
         raw_amount = value.get("amount")
@@ -701,9 +717,9 @@ class WikiReach:
             unit=None if raw_unit == "1" else raw_unit.rsplit("/", maxsplit=1)[-1],
         )
 
+    # Extract an English label or description from an API field.
     @staticmethod
     def _localized_value(data: object, field: str) -> str:
-        # Extract an English label or description from an API field.
         if not isinstance(data, dict):
             raise WikiReachResponseError(f"Wikidata entity has an invalid {field}.")
         english = data.get("en")
@@ -716,9 +732,9 @@ class WikiReach:
             raise WikiReachResponseError(f"Wikidata entity has an invalid {field}.")
         return value
 
+    # Extract an optional English value from an API field.
     @staticmethod
     def _optional_localized_value(data: object, field: str) -> str | None:
-        # Extract an optional English value from an API field.
         if data is None:
             return None
         if not isinstance(data, dict):
