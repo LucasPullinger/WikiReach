@@ -1,5 +1,6 @@
 # WikiReach tools for exploring relationships in Wikidata.
 
+from .claim import Claim
 from .client import WikiReach
 from .connection import Connection
 from .entity import Entity
@@ -23,6 +24,7 @@ __version__ = "0.1.0"
 __all__ = [
     "Entity",
     "Connection",
+    "Claim",
     "EntityNotFoundError",
     "InvalidEntityIdError",
     "InvalidDepthError",

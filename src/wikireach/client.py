@@ -5,6 +5,7 @@ from collections.abc import Collection
 from typing import TypeAlias
 
 from ._api import BATCH_SIZE, get_payload
+from .claim import Claim
 from .connection import Connection
 from .entity import Entity
 from .exceptions import (
@@ -20,7 +21,7 @@ from .path import PathResult
 from .relation import Relation
 from .traversal import TraversalResult
 
-Claims: TypeAlias = dict[str, list[object]]
+Claims: TypeAlias = dict[str, list[Claim]]
 PropertyFilter: TypeAlias = Collection[str] | None
 
 
@@ -65,7 +66,7 @@ class WikiReach:
         )
 
     def claims(self, entity_id: str) -> Claims:
-        """Return raw main-snak values keyed by Wikidata property ID."""
+        """Return typed claims keyed by Wikidata property ID."""
         self._validate_entity_id(entity_id)
 
         return self._claims_from_payload(
@@ -317,8 +318,11 @@ class WikiReach:
             )
         return property_ids
 
-    def _entity_target_id(self, value: object) -> str | None:
+    def _entity_target_id(self, claim: Claim) -> str | None:
         # Return a valid target Q-ID when a claim value references an item.
+        if claim.value_type != "wikibase-entityid":
+            return None
+        value = claim.value
         if not isinstance(value, dict) or value.get("entity-type") != "item":
             return None
         target_id = value.get("id")
@@ -444,7 +448,8 @@ class WikiReach:
             ):
                 raise WikiReachResponseError("Wikidata entity has invalid claims.")
             clean_claims[property_id] = [
-                WikiReach._claim_value(claim) for claim in property_claims
+                WikiReach._claim_from_payload(claim, property_id, entity_id)
+                for claim in property_claims
             ]
         return clean_claims
 
@@ -539,8 +544,8 @@ class WikiReach:
         return entities
 
     @staticmethod
-    def _claim_value(claim: object) -> object:
-        # Extract a claim's raw main-snak value.
+    def _claim_from_payload(claim: object, property_id: str, source_id: str) -> Claim:
+        # Convert a raw Wikidata statement into a typed Claim.
         if not isinstance(claim, dict):
             raise WikiReachResponseError("Wikidata entity has an invalid claim.")
         snak = claim.get("mainsnak")
@@ -548,13 +553,26 @@ class WikiReach:
             raise WikiReachResponseError("Wikidata claim is missing a main snak.")
         snak_type = snak.get("snaktype")
         if snak_type in {"somevalue", "novalue"}:
-            return None
+            return Claim(
+                property_id=property_id,
+                source_id=source_id,
+                value=None,
+                value_type=snak_type,
+            )
         if snak_type != "value":
             raise WikiReachResponseError("Wikidata claim has an invalid snak type.")
         data_value = snak.get("datavalue")
         if not isinstance(data_value, dict) or "value" not in data_value:
             raise WikiReachResponseError("Wikidata claim is missing a value.")
-        return data_value["value"]
+        value_type = data_value.get("type")
+        if value_type is not None and not isinstance(value_type, str):
+            raise WikiReachResponseError("Wikidata claim has an invalid value type.")
+        return Claim(
+            property_id=property_id,
+            source_id=source_id,
+            value=data_value["value"],
+            value_type=value_type or "unknown",
+        )
 
     @staticmethod
     def _localized_value(data: object, field: str) -> str:

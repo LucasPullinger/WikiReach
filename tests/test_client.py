@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from wikireach import (
+    Claim,
     Connection,
     Entity,
     EntityNotFoundError,
@@ -34,7 +35,17 @@ def json_response(payload: object) -> httpx.Response:
 
 def claim(value: object) -> dict[str, object]:
     # Build a mocked Wikidata value claim.
-    return {"mainsnak": {"snaktype": "value", "datavalue": {"value": value}}}
+    value_type = (
+        "wikibase-entityid"
+        if isinstance(value, dict) and value.get("entity-type") == "item"
+        else "string"
+    )
+    return {
+        "mainsnak": {
+            "snaktype": "value",
+            "datavalue": {"value": value, "type": value_type},
+        }
+    }
 
 
 def mock_claims(
@@ -330,7 +341,10 @@ def test_claims_returns_multiple_properties_and_values(
                                 {
                                     "mainsnak": {
                                         "snaktype": "value",
-                                        "datavalue": {"value": {"id": "Q5"}},
+                                        "datavalue": {
+                                            "value": {"id": "Q5"},
+                                            "type": "wikibase-entityid",
+                                        },
                                     }
                                 }
                             ],
@@ -366,9 +380,12 @@ def test_claims_returns_multiple_properties_and_values(
     monkeypatch.setattr(httpx, "get", mock_get)
 
     assert WikiReach().claims("Q937") == {
-        "P31": [{"id": "Q5"}],
-        "P19": [{"id": "Q1731"}],
-        "P106": [{"id": "Q169470"}, {"id": "Q901"}],
+        "P31": [Claim("P31", "Q937", {"id": "Q5"}, "wikibase-entityid")],
+        "P19": [Claim("P19", "Q937", {"id": "Q1731"}, "unknown")],
+        "P106": [
+            Claim("P106", "Q937", {"id": "Q169470"}, "unknown"),
+            Claim("P106", "Q937", {"id": "Q901"}, "unknown"),
+        ],
     }
 
 
@@ -389,7 +406,9 @@ def test_claims_represent_non_value_snaks_as_none(
         ),
     )
 
-    assert WikiReach().claims("Q937") == {"P19": [None]}
+    assert WikiReach().claims("Q937") == {
+        "P19": [Claim("P19", "Q937", None, snak_type)]
+    }
 
 
 def test_claims_returns_empty_mapping_for_entity_without_claims(

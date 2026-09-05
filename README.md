@@ -24,7 +24,7 @@ wiki = WikiReach()
 
 wiki.search("Albert Einstein")       # Best matching Entity
 wiki.entity("Q937")                  # Entity by Q-ID
-wiki.claims("Q937")                  # Raw values grouped by P-ID
+wiki.claims("Q937")                  # Typed Claim objects grouped by P-ID
 wiki.relations("Q937")               # Outgoing Relation objects
 wiki.neighbors("Q937")               # Unique outgoing Entity objects
 wiki.traverse("Q937", depth=2)       # TraversalResult
@@ -37,6 +37,13 @@ Search and direct lookup:
 ```python
 entity = wiki.search("Albert Einstein")
 print(entity.id, entity.label)  # Q937 Albert Einstein
+```
+
+Inspect typed claims without parsing Wikidata's raw response structure:
+
+```python
+claim = wiki.claims("Q937")["P569"][0]
+print(claim.property_id, claim.value, claim.value_type)
 ```
 
 Limit graph operations to Wikidata property IDs, which define allowed edge
