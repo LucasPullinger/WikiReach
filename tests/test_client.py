@@ -9,6 +9,7 @@ from wikireach import (
     EntityNotFoundError,
     InvalidEntityIdError,
     InvalidQueryError,
+    Relation,
     WikiReach,
     WikiReachHTTPError,
     WikiReachResponseError,
@@ -21,6 +22,24 @@ def json_response(payload: object) -> httpx.Response:
         200,
         json=payload,
         request=httpx.Request("GET", "https://www.wikidata.org/w/api.php"),
+    )
+
+
+def claim(value: object) -> dict[str, object]:
+    # Build a mocked Wikidata value claim.
+    return {"mainsnak": {"snaktype": "value", "datavalue": {"value": value}}}
+
+
+def mock_claims(
+    monkeypatch: pytest.MonkeyPatch, claims: dict[str, list[object]]
+) -> None:
+    # Mock a wbgetentities response containing claims for Q937.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: json_response(
+            {"entities": {"Q937": {"claims": claims}}}
+        ),
     )
 
 
@@ -331,3 +350,96 @@ def test_claims_converts_http_failures(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(WikiReachHTTPError):
         WikiReach().claims("Q937")
+
+
+def test_relations_returns_one_entity_relation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A single item-valued claim becomes a Relation.
+    mock_claims(monkeypatch, {"P31": [claim({"entity-type": "item", "id": "Q5"})]})
+
+    assert WikiReach().relations("Q937") == [Relation("P31", "Q937", "Q5")]
+
+
+def test_relations_preserves_multiple_claims_for_one_property(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Multiple statements under one property remain separate relations.
+    mock_claims(
+        monkeypatch,
+        {
+            "P106": [
+                claim({"entity-type": "item", "id": "Q169470"}),
+                claim({"entity-type": "item", "id": "Q901"}),
+            ]
+        },
+    )
+
+    assert WikiReach().relations("Q937") == [
+        Relation("P106", "Q937", "Q169470"),
+        Relation("P106", "Q937", "Q901"),
+    ]
+
+
+def test_relations_spans_multiple_properties(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Item-valued claims across properties become relations.
+    mock_claims(
+        monkeypatch,
+        {
+            "P31": [claim({"entity-type": "item", "id": "Q5"})],
+            "P19": [claim({"entity-type": "item", "id": "Q1731"})],
+        },
+    )
+
+    assert WikiReach().relations("Q937") == [
+        Relation("P31", "Q937", "Q5"),
+        Relation("P19", "Q937", "Q1731"),
+    ]
+
+
+def test_relations_ignores_non_entity_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Strings, dates, coordinates, URLs, and quantities do not become relations.
+    mock_claims(
+        monkeypatch,
+        {
+            "P31": [claim({"entity-type": "item", "id": "Q5"})],
+            "P569": [claim({"time": "+1879-03-14T00:00:00Z"})],
+            "P856": [claim("https://example.com")],
+            "P2048": [claim({"amount": "+1"})],
+        },
+    )
+
+    assert WikiReach().relations("Q937") == [Relation("P31", "Q937", "Q5")]
+
+
+def test_relations_ignores_none_and_invalid_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Non-value snaks and malformed target IDs do not become relations.
+    mock_claims(
+        monkeypatch,
+        {
+            "P19": [
+                {"mainsnak": {"snaktype": "novalue"}},
+                claim({"entity-type": "item", "id": "not-a-q-id"}),
+                claim({"entity-type": "item", "id": "P31"}),
+            ]
+        },
+    )
+
+    assert WikiReach().relations("Q937") == []
+
+
+def test_relations_returns_empty_list_without_entity_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Claims without entity targets produce no relations.
+    mock_claims(monkeypatch, {"P856": [claim("https://example.com")]})
+
+    assert WikiReach().relations("Q937") == []
+
+
+def test_relations_rejects_invalid_source_id() -> None:
+    # Relation lookup reuses Q-ID validation through claims().
+    with pytest.raises(InvalidEntityIdError):
+        WikiReach().relations("P31")

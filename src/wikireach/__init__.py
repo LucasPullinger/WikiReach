@@ -10,6 +10,7 @@ from .exceptions import (
     WikiReachHTTPError,
     WikiReachResponseError,
 )
+from .relation import Relation
 
 __version__ = "0.1.0"
 
@@ -18,6 +19,7 @@ __all__ = [
     "EntityNotFoundError",
     "InvalidEntityIdError",
     "InvalidQueryError",
+    "Relation",
     "WikiReach",
     "WikiReachError",
     "WikiReachHTTPError",

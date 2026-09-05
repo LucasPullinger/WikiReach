@@ -12,6 +12,7 @@ from .exceptions import (
     WikiReachHTTPError,
     WikiReachResponseError,
 )
+from .relation import Relation
 
 
 class WikiReach:
@@ -70,6 +71,22 @@ class WikiReach:
             entity_id,
         )
 
+    def relations(self, entity_id: str) -> list[Relation]:
+        # Return item-valued claims as directed entity relationships.
+        relations: list[Relation] = []
+        for property_id, values in self.claims(entity_id).items():
+            for value in values:
+                target_id = self._entity_target_id(value)
+                if target_id is not None:
+                    relations.append(
+                        Relation(
+                            property_id=property_id,
+                            source_id=entity_id,
+                            target_id=target_id,
+                        )
+                    )
+        return relations
+
     def _validate_entity_id(self, entity_id: str) -> None:
         # Validate a Wikidata item identifier.
         if not isinstance(entity_id, str) or not self._ENTITY_ID_PATTERN.fullmatch(
@@ -78,6 +95,17 @@ class WikiReach:
             raise InvalidEntityIdError(
                 "Entity ID must be a Wikidata Q-ID such as 'Q937'."
             )
+
+    def _entity_target_id(self, value: object) -> str | None:
+        # Return a valid target Q-ID when a claim value references an item.
+        if not isinstance(value, dict) or value.get("entity-type") != "item":
+            return None
+        target_id = value.get("id")
+        if not isinstance(target_id, str) or not self._ENTITY_ID_PATTERN.fullmatch(
+            target_id
+        ):
+            return None
+        return target_id
 
     def _get_payload(self, params: dict[str, str]) -> object:
         # Request and decode a Wikidata API response.

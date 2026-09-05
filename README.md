@@ -64,6 +64,17 @@ print(claims["P31"])  # [{"entity-type": "item", "numeric-id": 5, "id": "Q5"}]
 Claims marked by Wikidata as having an unknown or no value are represented as
 `None`.
 
+Convert item-valued claims into typed relationships:
+
+```python
+for relation in wiki.relations("Q937"):
+    print(relation.property_id, relation.target_id)
+
+# P31 Q5
+# P19 Q1731
+# P106 Q169470
+```
+
 ## Requirements
 
 * Python 3.11 or later
