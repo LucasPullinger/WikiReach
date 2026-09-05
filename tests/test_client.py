@@ -185,3 +185,149 @@ def test_entity_rejects_invalid_response(
 
     with pytest.raises(WikiReachResponseError):
         WikiReach().entity("Q937")
+
+
+def test_claims_returns_multiple_properties_and_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Claims preserve raw main-snak values under their property IDs.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        request = httpx.Request("GET", args[0], params=kwargs["params"])
+        assert request.url.params["action"] == "wbgetentities"
+        assert request.url.params["ids"] == "Q937"
+        assert request.url.params["props"] == "claims"
+        return httpx.Response(
+            200,
+            json={
+                "entities": {
+                    "Q937": {
+                        "claims": {
+                            "P31": [
+                                {
+                                    "mainsnak": {
+                                        "snaktype": "value",
+                                        "datavalue": {"value": {"id": "Q5"}},
+                                    }
+                                }
+                            ],
+                            "P19": [
+                                {
+                                    "mainsnak": {
+                                        "snaktype": "value",
+                                        "datavalue": {"value": {"id": "Q1731"}},
+                                    }
+                                }
+                            ],
+                            "P106": [
+                                {
+                                    "mainsnak": {
+                                        "snaktype": "value",
+                                        "datavalue": {"value": {"id": "Q169470"}},
+                                    }
+                                },
+                                {
+                                    "mainsnak": {
+                                        "snaktype": "value",
+                                        "datavalue": {"value": {"id": "Q901"}},
+                                    }
+                                },
+                            ],
+                        }
+                    }
+                }
+            },
+            request=request,
+        )
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    assert WikiReach().claims("Q937") == {
+        "P31": [{"id": "Q5"}],
+        "P19": [{"id": "Q1731"}],
+        "P106": [{"id": "Q169470"}, {"id": "Q901"}],
+    }
+
+
+@pytest.mark.parametrize("snak_type", ["somevalue", "novalue"])
+def test_claims_represent_non_value_snaks_as_none(
+    monkeypatch: pytest.MonkeyPatch, snak_type: str
+) -> None:
+    # Valid snaks without a data value remain represented in the result.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: json_response(
+            {
+                "entities": {
+                    "Q937": {"claims": {"P19": [{"mainsnak": {"snaktype": snak_type}}]}}
+                }
+            }
+        ),
+    )
+
+    assert WikiReach().claims("Q937") == {"P19": [None]}
+
+
+def test_claims_returns_empty_mapping_for_entity_without_claims(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An entity with no claims returns an empty mapping.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: json_response({"entities": {"Q937": {"claims": {}}}}),
+    )
+
+    assert WikiReach().claims("Q937") == {}
+
+
+def test_claims_rejects_invalid_id() -> None:
+    # Claim retrieval uses the shared Q-ID validation.
+    with pytest.raises(InvalidEntityIdError):
+        WikiReach().claims("P31")
+
+
+def test_claims_raises_when_entity_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A missing entity raises the existing not-found exception.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: json_response({"entities": {"Q937": {"missing": ""}}}),
+    )
+
+    with pytest.raises(EntityNotFoundError):
+        WikiReach().claims("Q937")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"entities": {"Q937": {}}},
+        {"entities": {"Q937": {"claims": {"P31": [{}]}}}},
+    ],
+)
+def test_claims_rejects_malformed_response(
+    monkeypatch: pytest.MonkeyPatch, payload: object
+) -> None:
+    # Malformed claims responses raise a WikiReach-specific exception.
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: json_response(payload))
+
+    with pytest.raises(WikiReachResponseError):
+        WikiReach().claims("Q937")
+
+
+def test_claims_converts_http_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    # HTTP failures are exposed as WikiReach errors.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: httpx.Response(
+            500, request=httpx.Request("GET", "https://www.wikidata.org/w/api.php")
+        ),
+    )
+
+    with pytest.raises(WikiReachHTTPError):
+        WikiReach().claims("Q937")

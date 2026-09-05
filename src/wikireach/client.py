@@ -39,12 +39,7 @@ class WikiReach:
 
     def entity(self, entity_id: str) -> Entity:
         # Return an English Wikidata entity for a Q-ID.
-        if not isinstance(entity_id, str) or not self._ENTITY_ID_PATTERN.fullmatch(
-            entity_id
-        ):
-            raise InvalidEntityIdError(
-                "Entity ID must be a Wikidata Q-ID such as 'Q937'."
-            )
+        self._validate_entity_id(entity_id)
 
         return self._entity_from_lookup_payload(
             self._get_payload(
@@ -58,6 +53,31 @@ class WikiReach:
             ),
             entity_id,
         )
+
+    def claims(self, entity_id: str) -> dict[str, list[object]]:
+        # Return raw main-snak values for an entity's claims, keyed by property ID.
+        self._validate_entity_id(entity_id)
+
+        return self._claims_from_payload(
+            self._get_payload(
+                {
+                    "action": "wbgetentities",
+                    "ids": entity_id,
+                    "props": "claims",
+                    "format": "json",
+                }
+            ),
+            entity_id,
+        )
+
+    def _validate_entity_id(self, entity_id: str) -> None:
+        # Validate a Wikidata item identifier.
+        if not isinstance(entity_id, str) or not self._ENTITY_ID_PATTERN.fullmatch(
+            entity_id
+        ):
+            raise InvalidEntityIdError(
+                "Entity ID must be a Wikidata Q-ID such as 'Q937'."
+            )
 
     def _get_payload(self, params: dict[str, str]) -> object:
         # Request and decode a Wikidata API response.
@@ -109,6 +129,43 @@ class WikiReach:
     @staticmethod
     def _entity_from_lookup_payload(payload: object, entity_id: str) -> Entity:
         # Convert a wbgetentities response into an Entity.
+        result = WikiReach._entity_data_from_payload(payload, entity_id)
+
+        label = WikiReach._localized_value(result.get("labels"), "label")
+        description_data = result.get("descriptions")
+        description = (
+            None
+            if description_data is None
+            else WikiReach._localized_value(description_data, "description")
+        )
+        return Entity(id=entity_id, label=label, description=description)
+
+    @staticmethod
+    def _claims_from_payload(
+        payload: object, entity_id: str
+    ) -> dict[str, list[object]]:
+        # Extract raw main-snak values from a wbgetentities response.
+        result = WikiReach._entity_data_from_payload(payload, entity_id)
+        claims = result.get("claims")
+        if not isinstance(claims, dict):
+            raise WikiReachResponseError("Wikidata entity has invalid claims.")
+
+        clean_claims: dict[str, list[object]] = {}
+        for property_id, property_claims in claims.items():
+            if not isinstance(property_id, str) or not isinstance(
+                property_claims, list
+            ):
+                raise WikiReachResponseError("Wikidata entity has invalid claims.")
+            clean_claims[property_id] = [
+                WikiReach._claim_value(claim) for claim in property_claims
+            ]
+        return clean_claims
+
+    @staticmethod
+    def _entity_data_from_payload(
+        payload: object, entity_id: str
+    ) -> dict[object, object]:
+        # Extract the requested entity's data from a wbgetentities response.
         if not isinstance(payload, dict):
             raise WikiReachResponseError("Wikidata returned an invalid response.")
 
@@ -120,15 +177,25 @@ class WikiReach:
             raise WikiReachResponseError("Wikidata response is missing entity data.")
         if "missing" in result:
             raise EntityNotFoundError(f"Wikidata entity {entity_id} was not found.")
+        return result
 
-        label = WikiReach._localized_value(result.get("labels"), "label")
-        description_data = result.get("descriptions")
-        description = (
-            None
-            if description_data is None
-            else WikiReach._localized_value(description_data, "description")
-        )
-        return Entity(id=entity_id, label=label, description=description)
+    @staticmethod
+    def _claim_value(claim: object) -> object:
+        # Extract a claim's raw main-snak value.
+        if not isinstance(claim, dict):
+            raise WikiReachResponseError("Wikidata entity has an invalid claim.")
+        snak = claim.get("mainsnak")
+        if not isinstance(snak, dict):
+            raise WikiReachResponseError("Wikidata claim is missing a main snak.")
+        snak_type = snak.get("snaktype")
+        if snak_type in {"somevalue", "novalue"}:
+            return None
+        if snak_type != "value":
+            raise WikiReachResponseError("Wikidata claim has an invalid snak type.")
+        data_value = snak.get("datavalue")
+        if not isinstance(data_value, dict) or "value" not in data_value:
+            raise WikiReachResponseError("Wikidata claim is missing a value.")
+        return data_value["value"]
 
     @staticmethod
     def _localized_value(data: object, field: str) -> str:

@@ -53,6 +53,17 @@ entity = wiki.entity("Q937")
 print(entity.label)  # Albert Einstein
 ```
 
+Fetch raw claim values, grouped by Wikidata property ID:
+
+```python
+claims = wiki.claims("Q937")
+
+print(claims["P31"])  # [{"entity-type": "item", "numeric-id": 5, "id": "Q5"}]
+```
+
+Claims marked by Wikidata as having an unknown or no value are represented as
+`None`.
+
 ## Requirements
 
 * Python 3.11 or later
