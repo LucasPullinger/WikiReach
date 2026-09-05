@@ -1,6 +1,7 @@
 # Synchronous client for the Wikidata API.
 
 import re
+from collections.abc import Collection
 
 import httpx
 
@@ -9,6 +10,7 @@ from .exceptions import (
     EntityNotFoundError,
     InvalidDepthError,
     InvalidEntityIdError,
+    InvalidPropertyIdError,
     InvalidQueryError,
     PathNotFoundError,
     WikiReachHTTPError,
@@ -25,6 +27,7 @@ class WikiReach:
     _API_URL = "https://www.wikidata.org/w/api.php"
     _USER_AGENT = "WikiReach/0.1.0 (https://github.com/wikireach/wikireach)"
     _ENTITY_ID_PATTERN = re.compile(r"Q[1-9]\d*$")
+    _PROPERTY_ID_PATTERN = re.compile(r"P[1-9]\d*$")
 
     def search(self, query: str) -> Entity:
         # Return the best English Wikidata entity matching the query.
@@ -77,11 +80,40 @@ class WikiReach:
         )
 
     def relations(
-        self, entity_id: str, *, resolve_labels: bool = False
+        self,
+        entity_id: str,
+        *,
+        resolve_labels: bool = False,
+        properties: Collection[str] | None = None,
     ) -> list[Relation]:
         # Return item-valued claims as directed entity relationships.
+        allowed_properties = self._validate_properties(properties)
+        return self._relations(entity_id, allowed_properties, resolve_labels)
+
+    def neighbors(
+        self, entity_id: str, *, properties: Collection[str] | None = None
+    ) -> list[Entity]:
+        # Return unique, directly connected entities in first-seen relation order.
+        allowed_properties = self._validate_properties(properties)
+        target_ids = list(
+            dict.fromkeys(
+                relation.target_id
+                for relation in self._relations(entity_id, allowed_properties)
+            )
+        )
+        return self._entities(target_ids)
+
+    def _relations(
+        self,
+        entity_id: str,
+        allowed_properties: set[str] | None,
+        resolve_labels: bool = False,
+    ) -> list[Relation]:
+        # Build item-valued relations using an already validated property filter.
         relations: list[Relation] = []
         for property_id, values in self.claims(entity_id).items():
+            if allowed_properties is not None and property_id not in allowed_properties:
+                continue
             for value in values:
                 target_id = self._entity_target_id(value)
                 if target_id is not None:
@@ -94,20 +126,20 @@ class WikiReach:
                     )
         return self._relations_with_labels(relations) if resolve_labels else relations
 
-    def neighbors(self, entity_id: str) -> list[Entity]:
-        # Return unique, directly connected entities in first-seen relation order.
-        target_ids = list(
-            dict.fromkeys(relation.target_id for relation in self.relations(entity_id))
-        )
-        return self._entities(target_ids)
-
-    def traverse(self, entity_id: str, depth: int = 1) -> TraversalResult:
+    def traverse(
+        self,
+        entity_id: str,
+        depth: int = 1,
+        *,
+        properties: Collection[str] | None = None,
+    ) -> TraversalResult:
         # Traverse outgoing item-to-item relations breadth-first to a set depth.
         self._validate_entity_id(entity_id)
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
             raise InvalidDepthError(
                 "Traversal depth must be an integer greater than or equal to 0."
             )
+        allowed_properties = self._validate_properties(properties)
 
         root_entities = self._entities([entity_id])
         if not root_entities:
@@ -121,7 +153,7 @@ class WikiReach:
         for _ in range(depth):
             discovered_ids: list[str] = []
             for source_id in frontier:
-                source_relations = self.relations(source_id)
+                source_relations = self._relations(source_id, allowed_properties)
                 relations.extend(source_relations)
                 for relation in source_relations:
                     if relation.target_id not in visited:
@@ -140,7 +172,14 @@ class WikiReach:
             relations=tuple(relations),
         )
 
-    def path(self, source_id: str, target_id: str, max_depth: int = 3) -> PathResult:
+    def path(
+        self,
+        source_id: str,
+        target_id: str,
+        max_depth: int = 3,
+        *,
+        properties: Collection[str] | None = None,
+    ) -> PathResult:
         # Find the shortest outgoing relation path with breadth-first search.
         self._validate_entity_id(source_id)
         self._validate_entity_id(target_id)
@@ -152,6 +191,7 @@ class WikiReach:
             raise InvalidDepthError(
                 "Maximum path depth must be an integer greater than or equal to 0."
             )
+        allowed_properties = self._validate_properties(properties)
 
         if source_id == target_id:
             entities = self._entities([source_id])
@@ -167,7 +207,7 @@ class WikiReach:
         for _ in range(max_depth):
             next_frontier: list[str] = []
             for current_id in frontier:
-                for relation in self.relations(current_id):
+                for relation in self._relations(current_id, allowed_properties):
                     next_id = relation.target_id
                     if next_id in visited:
                         continue
@@ -214,6 +254,28 @@ class WikiReach:
             raise InvalidEntityIdError(
                 "Entity ID must be a Wikidata Q-ID such as 'Q937'."
             )
+
+    def _validate_properties(
+        self, properties: Collection[str] | None
+    ) -> set[str] | None:
+        # Validate and copy an optional collection of Wikidata property IDs.
+        if properties is None:
+            return None
+        if isinstance(properties, str):
+            raise InvalidPropertyIdError(
+                "Properties must be a collection of Wikidata P-IDs."
+            )
+
+        property_ids = set(properties)
+        if any(
+            not isinstance(property_id, str)
+            or not self._PROPERTY_ID_PATTERN.fullmatch(property_id)
+            for property_id in property_ids
+        ):
+            raise InvalidPropertyIdError(
+                "Properties must contain Wikidata P-IDs such as 'P31'."
+            )
+        return property_ids
 
     def _entity_target_id(self, value: object) -> str | None:
         # Return a valid target Q-ID when a claim value references an item.

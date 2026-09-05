@@ -99,6 +99,16 @@ for entity in wiki.neighbors("Q937"):
 # Q3012 Ulm
 ```
 
+Limit graph operations to selected Wikidata property IDs, which define the
+allowed edge types:
+
+```python
+wiki.neighbors(
+    "Q937",
+    properties={"P19", "P106"},
+)
+```
+
 Traverse outward through item-to-item relations with breadth-first search:
 
 ```python

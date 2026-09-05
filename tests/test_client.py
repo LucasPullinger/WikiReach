@@ -10,6 +10,7 @@ from wikireach import (
     EntityNotFoundError,
     InvalidDepthError,
     InvalidEntityIdError,
+    InvalidPropertyIdError,
     InvalidQueryError,
     PathNotFoundError,
     PathResult,
@@ -1241,3 +1242,141 @@ def test_path_converts_http_and_malformed_responses(
 
     with pytest.raises(WikiReachResponseError):
         WikiReach().path("Q1", "Q2")
+
+
+def test_relations_filter_one_or_multiple_properties(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Filters retain only the requested property IDs in source order.
+    mock_claims(
+        monkeypatch,
+        {
+            "P31": [claim({"entity-type": "item", "id": "Q5"})],
+            "P19": [claim({"entity-type": "item", "id": "Q1731"})],
+            "P106": [claim({"entity-type": "item", "id": "Q901"})],
+        },
+    )
+
+    assert [
+        relation.property_id
+        for relation in WikiReach().relations("Q937", properties={"P19", "P106"})
+    ] == ["P19", "P106"]
+
+
+def test_relations_filter_no_matches_and_empty_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Empty and non-matching filters yield no outgoing relations.
+    mock_claims(
+        monkeypatch,
+        {"P31": [claim({"entity-type": "item", "id": "Q5"})]},
+    )
+
+    assert WikiReach().relations("Q937", properties={"P19"}) == []
+    assert WikiReach().relations("Q937", properties=[]) == []
+
+
+def test_relations_none_and_duplicate_properties_preserve_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # None means unfiltered, and duplicate requested IDs do not change results.
+    mock_claims(
+        monkeypatch,
+        {
+            "P31": [claim({"entity-type": "item", "id": "Q5"})],
+            "P19": [claim({"entity-type": "item", "id": "Q1731"})],
+        },
+    )
+
+    unfiltered = WikiReach().relations("Q937")
+    filtered = WikiReach().relations("Q937", properties=["P31", "P31"])
+
+    assert [relation.property_id for relation in unfiltered] == ["P31", "P19"]
+    assert [relation.property_id for relation in filtered] == ["P31"]
+
+
+@pytest.mark.parametrize("properties", [{"31"}, {"Q31"}, {"PABC"}, {""}])
+def test_graph_operations_reject_invalid_property_ids(
+    properties: set[str],
+) -> None:
+    # Every graph operation validates supplied Wikidata property IDs.
+    wiki = WikiReach()
+    with pytest.raises(InvalidPropertyIdError):
+        wiki.relations("Q1", properties=properties)
+    with pytest.raises(InvalidPropertyIdError):
+        wiki.neighbors("Q1", properties=properties)
+    with pytest.raises(InvalidPropertyIdError):
+        wiki.traverse("Q1", properties=properties)
+    with pytest.raises(InvalidPropertyIdError):
+        wiki.path("Q1", "Q2", properties=properties)
+
+
+def test_neighbors_apply_property_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Neighbor resolution sees only targets from allowed edge types.
+    mock_neighbors(
+        monkeypatch,
+        {
+            "P19": [claim({"entity-type": "item", "id": "Q1731"})],
+            "P106": [claim({"entity-type": "item", "id": "Q901"})],
+        },
+        {"Q1731": entity_record("Ulm"), "Q901": entity_record("scientist")},
+    )
+
+    assert [
+        entity.id for entity in WikiReach().neighbors("Q937", properties={"P19"})
+    ] == ["Q1731"]
+
+
+def test_traverse_filters_before_expanding_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Excluded first-hop targets are never added to the traversal frontier.
+    relation_requests: list[str] = []
+    mock_traversal(
+        monkeypatch,
+        {
+            "Q1": [("P1", "Q2"), ("P2", "Q3")],
+            "Q2": [("P1", "Q4")],
+            "Q3": [("P2", "Q5")],
+        },
+        {
+            "Q1": entity_record("one"),
+            "Q2": entity_record("two"),
+            "Q3": entity_record("three"),
+            "Q4": entity_record("four"),
+            "Q5": entity_record("five"),
+        },
+        relation_requests,
+    )
+
+    result = WikiReach().traverse("Q1", depth=2, properties={"P1"})
+
+    assert [entity.id for entity in result.entities] == ["Q1", "Q2", "Q4"]
+    assert relation_requests == ["Q1", "Q2"]
+
+
+def test_path_filters_before_searching_excluded_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A path follows only allowed edge types and skips excluded frontier nodes.
+    relation_requests: list[str] = []
+    mock_traversal(
+        monkeypatch,
+        {
+            "Q1": [("P1", "Q2"), ("P2", "Q3")],
+            "Q2": [("P1", "Q4")],
+            "Q3": [("P2", "Q4")],
+        },
+        {
+            "Q1": entity_record("one"),
+            "Q2": entity_record("two"),
+            "Q3": entity_record("three"),
+            "Q4": entity_record("four"),
+        },
+        relation_requests,
+    )
+
+    result = WikiReach().path("Q1", "Q4", properties={"P1"})
+
+    assert [entity.id for entity in result.entities] == ["Q1", "Q2", "Q4"]
+    assert relation_requests == ["Q1", "Q2"]

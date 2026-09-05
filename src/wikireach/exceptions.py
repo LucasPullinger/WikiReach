@@ -16,6 +16,11 @@ class InvalidEntityIdError(WikiReachError):
     pass
 
 
+class InvalidPropertyIdError(WikiReachError):
+    # Raised when a Wikidata property ID is invalid.
+    pass
+
+
 class InvalidDepthError(WikiReachError):
     # Raised when a traversal depth is invalid.
     pass
