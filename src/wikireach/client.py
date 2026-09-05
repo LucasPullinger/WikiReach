@@ -89,6 +89,13 @@ class WikiReach:
                     )
         return self._relations_with_labels(relations) if resolve_labels else relations
 
+    def neighbors(self, entity_id: str) -> list[Entity]:
+        # Return unique, directly connected entities in first-seen relation order.
+        target_ids = list(
+            dict.fromkeys(relation.target_id for relation in self.relations(entity_id))
+        )
+        return self._entities(target_ids)
+
     def _validate_entity_id(self, entity_id: str) -> None:
         # Validate a Wikidata item identifier.
         if not isinstance(entity_id, str) or not self._ENTITY_ID_PATTERN.fullmatch(
@@ -150,6 +157,23 @@ class WikiReach:
             labels.update(self._labels_from_payload(payload, batch))
         return labels
 
+    def _entities(self, entity_ids: list[str]) -> list[Entity]:
+        # Resolve entity metadata in batches while preserving the supplied order.
+        entities: list[Entity] = []
+        for start in range(0, len(entity_ids), 50):
+            batch = entity_ids[start : start + 50]
+            payload = self._get_payload(
+                {
+                    "action": "wbgetentities",
+                    "ids": "|".join(batch),
+                    "languages": "en",
+                    "props": "labels|descriptions",
+                    "format": "json",
+                }
+            )
+            entities.extend(self._entities_from_payload(payload, batch))
+        return entities
+
     def _get_payload(self, params: dict[str, str]) -> object:
         # Request and decode a Wikidata API response.
         try:
@@ -204,10 +228,8 @@ class WikiReach:
 
         label = WikiReach._localized_value(result.get("labels"), "label")
         description_data = result.get("descriptions")
-        description = (
-            None
-            if description_data is None
-            else WikiReach._localized_value(description_data, "description")
+        description = WikiReach._optional_localized_value(
+            description_data, "description"
         )
         return Entity(id=entity_id, label=label, description=description)
 
@@ -291,6 +313,38 @@ class WikiReach:
         return labels
 
     @staticmethod
+    def _entities_from_payload(
+        payload: object, requested_ids: list[str]
+    ) -> list[Entity]:
+        # Extract requested entities, omitting Wikidata records marked missing.
+        if not isinstance(payload, dict):
+            raise WikiReachResponseError("Wikidata returned an invalid response.")
+        results = payload.get("entities")
+        if not isinstance(results, dict):
+            raise WikiReachResponseError("Wikidata response is missing entities.")
+
+        entities: list[Entity] = []
+        for entity_id in requested_ids:
+            result = results.get(entity_id)
+            if not isinstance(result, dict):
+                raise WikiReachResponseError(
+                    "Wikidata response is missing entity data."
+                )
+            if "missing" in result:
+                continue
+
+            label = (
+                WikiReach._optional_localized_value(result.get("labels"), "label")
+                or entity_id
+            )
+            description_data = result.get("descriptions")
+            description = WikiReach._optional_localized_value(
+                description_data, "description"
+            )
+            entities.append(Entity(id=entity_id, label=label, description=description))
+        return entities
+
+    @staticmethod
     def _claim_value(claim: object) -> object:
         # Extract a claim's raw main-snak value.
         if not isinstance(claim, dict):
@@ -318,6 +372,23 @@ class WikiReach:
             raise WikiReachResponseError(
                 f"Wikidata entity is missing an English {field}."
             )
+        value = english.get("value")
+        if not isinstance(value, str):
+            raise WikiReachResponseError(f"Wikidata entity has an invalid {field}.")
+        return value
+
+    @staticmethod
+    def _optional_localized_value(data: object, field: str) -> str | None:
+        # Extract an optional English value from an API field.
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise WikiReachResponseError(f"Wikidata entity has an invalid {field}.")
+        english = data.get("en")
+        if english is None:
+            return None
+        if not isinstance(english, dict):
+            raise WikiReachResponseError(f"Wikidata entity has an invalid {field}.")
         value = english.get("value")
         if not isinstance(value, str):
             raise WikiReachResponseError(f"Wikidata entity has an invalid {field}.")

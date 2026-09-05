@@ -88,6 +88,17 @@ for relation in wiki.relations("Q937", resolve_labels=True):
 # place of birth -> Ulm
 ```
 
+Get the directly connected entities as `Entity` objects:
+
+```python
+for entity in wiki.neighbors("Q937"):
+    print(entity.id, entity.label)
+
+# Q1860 English
+# Q188 German
+# Q3012 Ulm
+```
+
 ## Requirements
 
 * Python 3.11 or later

@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from wikireach import (
+    Entity,
     EntityNotFoundError,
     InvalidEntityIdError,
     InvalidQueryError,
@@ -63,6 +64,42 @@ def mock_relations_with_labels(
             {
                 "entities": {
                     entity_id: label_entities.get(entity_id, {"missing": ""})
+                    for entity_id in requested_ids
+                }
+            }
+        )
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+
+def entity_record(label: str, description: str | None = None) -> dict[str, object]:
+    # Build a mocked Wikidata entity record.
+    record: dict[str, object] = {"labels": {"en": {"value": label}}}
+    if description is not None:
+        record["descriptions"] = {"en": {"value": description}}
+    return record
+
+
+def mock_neighbors(
+    monkeypatch: pytest.MonkeyPatch,
+    claims: dict[str, list[object]],
+    target_entities: dict[str, object],
+    entity_requests: list[list[str]] | None = None,
+) -> None:
+    # Mock claims and entity-resolution responses for neighbor lookup.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        params = kwargs["params"]
+        if params["props"] == "claims":
+            return json_response({"entities": {"Q937": {"claims": claims}}})
+
+        assert params["props"] == "labels|descriptions"
+        requested_ids = params["ids"].split("|")
+        if entity_requests is not None:
+            entity_requests.append(requested_ids)
+        return json_response(
+            {
+                "entities": {
+                    entity_id: target_entities.get(entity_id, {"missing": ""})
                     for entity_id in requested_ids
                 }
             }
@@ -605,3 +642,184 @@ def test_relations_convert_label_http_failures(
 
     with pytest.raises(WikiReachHTTPError):
         WikiReach().relations("Q937", resolve_labels=True)
+
+
+def test_neighbors_returns_one_entity_with_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A relation target resolves to an Entity with its English metadata.
+    mock_neighbors(
+        monkeypatch,
+        {"P31": [claim({"entity-type": "item", "id": "Q5"})]},
+        {"Q5": entity_record("human", "common name for all humans")},
+    )
+
+    assert WikiReach().neighbors("Q937") == [
+        Entity("Q5", "human", "common name for all humans")
+    ]
+
+
+def test_neighbors_return_none_without_an_english_description(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A target without an English description remains usable.
+    mock_neighbors(
+        monkeypatch,
+        {"P31": [claim({"entity-type": "item", "id": "Q5"})]},
+        {"Q5": {"labels": {"en": {"value": "human"}}, "descriptions": {}}},
+    )
+
+    assert WikiReach().neighbors("Q937") == [Entity("Q5", "human", None)]
+
+
+def test_neighbors_fall_back_to_id_without_an_english_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A target without an English label remains available using its Q-ID.
+    mock_neighbors(
+        monkeypatch,
+        {"P31": [claim({"entity-type": "item", "id": "Q5"})]},
+        {"Q5": {"labels": {}, "descriptions": {}}},
+    )
+
+    assert WikiReach().neighbors("Q937") == [Entity("Q5", "Q5", None)]
+
+
+def test_neighbors_preserve_first_seen_order_across_properties(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Neighbor order follows the first appearance of targets in relation data.
+    mock_neighbors(
+        monkeypatch,
+        {
+            "P31": [claim({"entity-type": "item", "id": "Q5"})],
+            "P19": [claim({"entity-type": "item", "id": "Q1731"})],
+        },
+        {"Q5": entity_record("human"), "Q1731": entity_record("Ulm")},
+    )
+
+    neighbors = WikiReach().neighbors("Q937")
+
+    assert [entity.id for entity in neighbors] == ["Q5", "Q1731"]
+
+
+def test_neighbors_deduplicate_target_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Repeated relation targets produce one neighbor and one requested ID.
+    entity_requests: list[list[str]] = []
+    mock_neighbors(
+        monkeypatch,
+        {
+            "P106": [
+                claim({"entity-type": "item", "id": "Q901"}),
+                claim({"entity-type": "item", "id": "Q901"}),
+            ]
+        },
+        {"Q901": entity_record("scientist")},
+        entity_requests,
+    )
+
+    assert [entity.id for entity in WikiReach().neighbors("Q937")] == ["Q901"]
+    assert entity_requests == [["Q901"]]
+
+
+def test_neighbors_resolve_entities_in_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    # More than 50 targets are resolved in batches rather than per entity.
+    target_ids = [f"Q{number}" for number in range(1, 52)]
+    entity_requests: list[list[str]] = []
+    mock_neighbors(
+        monkeypatch,
+        {
+            "P31": [
+                claim({"entity-type": "item", "id": target_id})
+                for target_id in target_ids
+            ]
+        },
+        {target_id: entity_record(target_id) for target_id in target_ids},
+        entity_requests,
+    )
+
+    neighbors = WikiReach().neighbors("Q937")
+
+    assert [entity.id for entity in neighbors] == target_ids
+    assert [len(batch) for batch in entity_requests] == [50, 1]
+
+
+def test_neighbors_ignore_missing_target_entities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Missing target records do not fail neighbor lookup.
+    mock_neighbors(
+        monkeypatch,
+        {
+            "P31": [claim({"entity-type": "item", "id": "Q5"})],
+            "P19": [claim({"entity-type": "item", "id": "Q1731"})],
+        },
+        {"Q5": entity_record("human"), "Q1731": {"missing": ""}},
+    )
+
+    assert [entity.id for entity in WikiReach().neighbors("Q937")] == ["Q5"]
+
+
+def test_neighbors_return_empty_list_when_no_relations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An entity without relations needs no entity-resolution request.
+    mock_neighbors(monkeypatch, {}, {})
+
+    assert WikiReach().neighbors("Q937") == []
+
+
+def test_neighbors_reject_invalid_source_id() -> None:
+    # Neighbor lookup reuses relation and claim Q-ID validation.
+    with pytest.raises(InvalidEntityIdError):
+        WikiReach().neighbors("P31")
+
+
+def test_neighbors_convert_entity_resolution_http_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Failures after relation retrieval use the existing HTTP exception.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        if kwargs["params"]["props"] == "claims":
+            return json_response(
+                {
+                    "entities": {
+                        "Q937": {
+                            "claims": {
+                                "P31": [claim({"entity-type": "item", "id": "Q5"})]
+                            }
+                        }
+                    }
+                }
+            )
+        return httpx.Response(503, request=httpx.Request("GET", args[0]))
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    with pytest.raises(WikiReachHTTPError):
+        WikiReach().neighbors("Q937")
+
+
+def test_neighbors_reject_malformed_entity_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Invalid target entity payloads use the existing response exception.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        if kwargs["params"]["props"] == "claims":
+            return json_response(
+                {
+                    "entities": {
+                        "Q937": {
+                            "claims": {
+                                "P31": [claim({"entity-type": "item", "id": "Q5"})]
+                            }
+                        }
+                    }
+                }
+            )
+        return json_response({"entities": {"Q5": {"labels": "invalid"}}})
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    with pytest.raises(WikiReachResponseError):
+        WikiReach().neighbors("Q937")
