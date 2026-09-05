@@ -52,7 +52,7 @@ class WikiReach:
 
     def entity(self, entity_id: str) -> Entity:
         # Return an English Wikidata entity for the given Q-ID.
-        self._validate_entity_id(entity_id)
+        entity_id = self._resolve_entity_id(entity_id)
 
         return self._entity_from_lookup_payload(
             get_payload(
@@ -70,7 +70,7 @@ class WikiReach:
 
     def claims(self, entity_id: str) -> Claims:
         # Return typed claims keyed by Wikidata property ID.
-        self._validate_entity_id(entity_id)
+        entity_id = self._resolve_entity_id(entity_id)
 
         return self._claims_from_payload(
             get_payload(
@@ -133,8 +133,8 @@ class WikiReach:
         properties: Collection[str] | None = None,
     ) -> list[Connection]:
         # Return outgoing targets shared by two source entities.
-        self._validate_entity_id(left_id)
-        self._validate_entity_id(right_id)
+        left_id = self._resolve_entity_id(left_id)
+        right_id = self._resolve_entity_id(right_id)
         allowed_properties = self._validate_properties(properties)
 
         left_relations = self._relations(left_id, allowed_properties)
@@ -171,6 +171,7 @@ class WikiReach:
         resolve_labels: bool = False,
     ) -> list[Relation]:
         # Build item-valued relations using an already validated property filter.
+        entity_id = self._resolve_entity_id(entity_id)
         relations: list[Relation] = []
         for property_id, values in self.claims(entity_id).items():
             if allowed_properties is not None and property_id not in allowed_properties:
@@ -195,7 +196,7 @@ class WikiReach:
         properties: Collection[str] | None = None,
     ) -> TraversalResult:
         # Traverse outgoing item-to-item relations breadth-first to the given depth.
-        self._validate_entity_id(entity_id)
+        entity_id = self._resolve_entity_id(entity_id)
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
             raise InvalidDepthError(
                 "Traversal depth must be an integer greater than or equal to 0."
@@ -242,8 +243,8 @@ class WikiReach:
         properties: Collection[str] | None = None,
     ) -> PathResult:
         # Find the shortest outgoing relation path within the maximum number of edges.
-        self._validate_entity_id(source_id)
-        self._validate_entity_id(target_id)
+        source_id = self._resolve_entity_id(source_id)
+        target_id = self._resolve_entity_id(target_id)
         if (
             isinstance(max_depth, bool)
             or not isinstance(max_depth, int)
@@ -315,6 +316,22 @@ class WikiReach:
             raise InvalidEntityIdError(
                 "Entity ID must be a Wikidata Q-ID such as 'Q937'."
             )
+
+    def _resolve_entity_id(self, entity_id: str) -> str:
+        # Resolve ordinary text through search while preserving strict ID validation.
+        if not isinstance(entity_id, str):
+            raise InvalidEntityIdError(
+                "Entity ID must be a Wikidata Q-ID such as 'Q937'."
+            )
+        if not entity_id.strip() or entity_id.isdecimal() or re.fullmatch(
+            r"[QP]\s.*", entity_id
+        ):
+            self._validate_entity_id(entity_id)
+        if self._ENTITY_ID_PATTERN.fullmatch(entity_id):
+            return entity_id
+        if re.fullmatch(r"[QP][A-Z0-9]*", entity_id):
+            self._validate_entity_id(entity_id)
+        return self.search(entity_id).id
 
     def _validate_properties(
         self, properties: Collection[str] | None

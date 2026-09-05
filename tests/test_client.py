@@ -1644,3 +1644,51 @@ def test_property_rejects_malformed_response(monkeypatch: pytest.MonkeyPatch) ->
 
     with pytest.raises(WikiReachResponseError):
         WikiReach().property("P31")
+
+
+def test_neighbors_resolve_text_to_a_best_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Ordinary entity text resolves through search before graph exploration.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        params = kwargs["params"]
+        if params["action"] == "wbsearchentities":
+            assert params["search"] == "Albert Einstein"
+            return json_response(
+                {
+                    "search": [
+                        {
+                            "id": "Q937",
+                            "label": "Albert Einstein",
+                            "description": "physicist",
+                        }
+                    ]
+                }
+            )
+        if params["props"] == "claims":
+            assert params["ids"] == "Q937"
+            return json_response(
+                {
+                    "entities": {
+                        "Q937": {
+                            "claims": {
+                                "P31": [claim({"entity-type": "item", "id": "Q5"})]
+                            }
+                        }
+                    }
+                }
+            )
+        return json_response(
+            {
+                "entities": {
+                    "Q5": {
+                        "labels": {"en": {"value": "human"}},
+                        "descriptions": {},
+                    }
+                }
+            }
+        )
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    assert WikiReach().neighbors("Albert Einstein") == [Entity("Q5", "human")]
