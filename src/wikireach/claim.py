@@ -15,10 +15,12 @@ def _empty_qualifiers() -> QualifierValues:
 
 @dataclass(frozen=True, slots=True)
 class Claim:
-    # A Wikidata claim with a typed main value and optional qualifier values.
+    # A Wikidata statement with a typed main value, qualifiers, rank, and ID.
 
     property_id: str
     source_id: str
     value: object
     value_type: str
     qualifiers: QualifierValues = field(default_factory=_empty_qualifiers)
+    rank: str = "normal"
+    statement_id: str | None = None

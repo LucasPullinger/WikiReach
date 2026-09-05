@@ -550,6 +550,77 @@ def test_claims_without_qualifiers_use_an_empty_mapping(
     assert WikiReach().claims("Q937")["P31"][0].qualifiers == {}
 
 
+def test_claims_preserve_statement_rank_and_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Statement metadata distinguishes preferred and deprecated Wikidata claims.
+    mock_claims(
+        monkeypatch,
+        {
+            "P31": [
+                {
+                    "id": "Q937$8d021124-4ef5-4e1f-b2af-9a6b1c3b707b",
+                    "rank": "preferred",
+                    "mainsnak": {
+                        "snaktype": "value",
+                        "datavalue": {"type": "string", "value": "human"},
+                    },
+                }
+            ]
+        },
+    )
+
+    result = WikiReach().claims("Q937")["P31"][0]
+
+    assert result.rank == "preferred"
+    assert result.statement_id == "Q937$8d021124-4ef5-4e1f-b2af-9a6b1c3b707b"
+
+
+@pytest.mark.parametrize("rank", ["best", None, 1])
+def test_claims_reject_invalid_statement_rank(
+    monkeypatch: pytest.MonkeyPatch, rank: object
+) -> None:
+    # Only Wikidata's three documented statement ranks are accepted.
+    mock_claims(
+        monkeypatch,
+        {
+            "P31": [
+                {
+                    "rank": rank,
+                    "mainsnak": {
+                        "snaktype": "value",
+                        "datavalue": {"type": "string", "value": "human"},
+                    },
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(WikiReachResponseError, match="invalid rank"):
+        WikiReach().claims("Q937")
+
+
+def test_claims_reject_invalid_statement_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Statement identifiers must be strings when supplied by Wikidata.
+    mock_claims(
+        monkeypatch,
+        {
+            "P31": [
+                {
+                    "id": 123,
+                    "mainsnak": {
+                        "snaktype": "value",
+                        "datavalue": {"type": "string", "value": "human"},
+                    },
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(WikiReachResponseError, match="invalid statement ID"):
+        WikiReach().claims("Q937")
+
+
 def test_claims_reject_malformed_qualifiers(monkeypatch: pytest.MonkeyPatch) -> None:
     # Qualifier parsing rejects malformed data rather than exposing raw API payloads.
     mock_claims(

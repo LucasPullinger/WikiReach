@@ -625,12 +625,20 @@ class WikiReach:
             raise WikiReachResponseError("Wikidata entity has an invalid claim.")
         snak = claim.get("mainsnak")
         value, value_type = WikiReach._value_from_snak(snak, "main")
+        rank = claim.get("rank", "normal")
+        if rank not in {"preferred", "normal", "deprecated"}:
+            raise WikiReachResponseError("Wikidata claim has an invalid rank.")
+        statement_id = claim.get("id")
+        if statement_id is not None and not isinstance(statement_id, str):
+            raise WikiReachResponseError("Wikidata claim has an invalid statement ID.")
         return Claim(
             property_id=property_id,
             source_id=source_id,
             value=value,
             value_type=value_type,
             qualifiers=WikiReach._qualifiers_from_payload(claim.get("qualifiers")),
+            rank=rank,
+            statement_id=statement_id,
         )
 
     # Convert a main or qualifier snak into a typed value and its value type.

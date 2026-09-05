@@ -85,6 +85,14 @@ for property_id, values in claim.qualifiers.items():
     print(property_id, values)
 ```
 
+Each claim also preserves Wikidata's statement rank and, when present, its
+statement ID:
+
+```python
+claim = wiki.claims("Q937")["P166"][0]
+print(claim.rank, claim.statement_id)
+```
+
 Look up the readable metadata behind a property ID:
 
 ```python
