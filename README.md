@@ -99,6 +99,25 @@ for entity in wiki.neighbors("Q937"):
 # Q3012 Ulm
 ```
 
+Traverse outward through item-to-item relations with breadth-first search:
+
+```python
+result = wiki.traverse("Q937", depth=2)
+
+print(result.root)
+print(len(result.entities))
+print(len(result.relations))
+```
+
+Find the shortest outgoing relationship path between two entities:
+
+```python
+path = wiki.path("Q937", "Q13133")
+
+for entity in path.entities:
+    print(entity.id, entity.label)
+```
+
 ## Requirements
 
 * Python 3.11 or later

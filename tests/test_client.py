@@ -8,9 +8,13 @@ import pytest
 from wikireach import (
     Entity,
     EntityNotFoundError,
+    InvalidDepthError,
     InvalidEntityIdError,
     InvalidQueryError,
+    PathNotFoundError,
+    PathResult,
     Relation,
+    TraversalResult,
     WikiReach,
     WikiReachHTTPError,
     WikiReachResponseError,
@@ -100,6 +104,40 @@ def mock_neighbors(
             {
                 "entities": {
                     entity_id: target_entities.get(entity_id, {"missing": ""})
+                    for entity_id in requested_ids
+                }
+            }
+        )
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+
+def mock_traversal(
+    monkeypatch: pytest.MonkeyPatch,
+    graph: dict[str, list[tuple[str, str]]],
+    entity_records: dict[str, object],
+    relation_requests: list[str] | None = None,
+) -> None:
+    # Mock a graph's claims and batched entity-resolution responses.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        params = kwargs["params"]
+        if params["props"] == "claims":
+            source_id = params["ids"]
+            if relation_requests is not None:
+                relation_requests.append(source_id)
+            claims: dict[str, list[object]] = {}
+            for property_id, target_id in graph.get(source_id, []):
+                claims.setdefault(property_id, []).append(
+                    claim({"entity-type": "item", "id": target_id})
+                )
+            return json_response({"entities": {source_id: {"claims": claims}}})
+
+        assert params["props"] == "labels|descriptions"
+        requested_ids = params["ids"].split("|")
+        return json_response(
+            {
+                "entities": {
+                    entity_id: entity_records.get(entity_id, {"missing": ""})
                     for entity_id in requested_ids
                 }
             }
@@ -823,3 +861,383 @@ def test_neighbors_reject_malformed_entity_resolution(
 
     with pytest.raises(WikiReachResponseError):
         WikiReach().neighbors("Q937")
+
+
+def test_traverse_depth_zero_returns_only_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Depth zero resolves the root without requesting its outgoing claims.
+    relation_requests: list[str] = []
+    mock_traversal(
+        monkeypatch,
+        {"Q1": [("P31", "Q2")]},
+        {"Q1": entity_record("root"), "Q2": entity_record("target")},
+        relation_requests,
+    )
+
+    result = WikiReach().traverse("Q1", depth=0)
+
+    assert result == TraversalResult(Entity("Q1", "root"), (Entity("Q1", "root"),), ())
+    assert relation_requests == []
+
+
+def test_traverse_depth_one_discovers_direct_neighbors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Depth one includes direct targets and the root's outgoing relations.
+    mock_traversal(
+        monkeypatch,
+        {"Q1": [("P31", "Q2")]},
+        {"Q1": entity_record("root"), "Q2": entity_record("target")},
+    )
+
+    result = WikiReach().traverse("Q1")
+
+    assert [entity.id for entity in result.entities] == ["Q1", "Q2"]
+    assert result.relations == (Relation("P31", "Q1", "Q2"),)
+
+
+def test_traverse_depth_two_uses_stable_breadth_first_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Each level is discovered and expanded in breadth-first order.
+    mock_traversal(
+        monkeypatch,
+        {
+            "Q1": [("P1", "Q2"), ("P2", "Q3")],
+            "Q2": [("P3", "Q4")],
+            "Q3": [("P4", "Q5")],
+        },
+        {
+            "Q1": entity_record("root"),
+            "Q2": entity_record("two"),
+            "Q3": entity_record("three"),
+            "Q4": entity_record("four"),
+            "Q5": entity_record("five"),
+        },
+    )
+
+    result = WikiReach().traverse("Q1", depth=2)
+
+    assert [entity.id for entity in result.entities] == ["Q1", "Q2", "Q3", "Q4", "Q5"]
+    assert [relation.source_id for relation in result.relations] == [
+        "Q1",
+        "Q1",
+        "Q2",
+        "Q3",
+    ]
+
+
+def test_traverse_prevents_cycles_and_preserves_duplicate_relations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Visited entities are not expanded twice, but duplicate statements remain.
+    relation_requests: list[str] = []
+    mock_traversal(
+        monkeypatch,
+        {"Q1": [("P1", "Q2"), ("P1", "Q2")], "Q2": [("P2", "Q1")]},
+        {"Q1": entity_record("one"), "Q2": entity_record("two")},
+        relation_requests,
+    )
+
+    result = WikiReach().traverse("Q1", depth=3)
+
+    assert [entity.id for entity in result.entities] == ["Q1", "Q2"]
+    assert len(result.relations) == 3
+    assert relation_requests == ["Q1", "Q2"]
+
+
+def test_traverse_deduplicates_entities_reached_by_multiple_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A target discovered via two sources appears once but both edges remain.
+    mock_traversal(
+        monkeypatch,
+        {
+            "Q1": [("P1", "Q2"), ("P2", "Q3")],
+            "Q2": [("P3", "Q4")],
+            "Q3": [("P4", "Q4")],
+        },
+        {
+            "Q1": entity_record("one"),
+            "Q2": entity_record("two"),
+            "Q3": entity_record("three"),
+            "Q4": entity_record("four"),
+        },
+    )
+
+    result = WikiReach().traverse("Q1", depth=2)
+
+    assert [entity.id for entity in result.entities] == ["Q1", "Q2", "Q3", "Q4"]
+    assert [relation.target_id for relation in result.relations].count("Q4") == 2
+
+
+def test_traverse_handles_entity_without_outgoing_relations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A leaf root produces an otherwise empty traversal result.
+    mock_traversal(monkeypatch, {}, {"Q1": entity_record("root")})
+
+    result = WikiReach().traverse("Q1", depth=2)
+
+    assert result.entities == (Entity("Q1", "root"),)
+    assert result.relations == ()
+
+
+@pytest.mark.parametrize("depth", [-1, True])
+def test_traverse_rejects_invalid_depth(depth: int) -> None:
+    # Traversal depth must be a non-negative integer, excluding booleans.
+    with pytest.raises(InvalidDepthError):
+        WikiReach().traverse("Q1", depth=depth)
+
+
+def test_traverse_rejects_invalid_root_id() -> None:
+    # Root IDs use the shared Q-ID validation.
+    with pytest.raises(InvalidEntityIdError):
+        WikiReach().traverse("P31")
+
+
+def test_traverse_ignores_missing_discovered_entities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Missing targets are omitted and never expanded at the next level.
+    relation_requests: list[str] = []
+    mock_traversal(
+        monkeypatch,
+        {"Q1": [("P1", "Q2")], "Q2": [("P2", "Q3")]},
+        {"Q1": entity_record("root"), "Q2": {"missing": ""}},
+        relation_requests,
+    )
+
+    result = WikiReach().traverse("Q1", depth=2)
+
+    assert [entity.id for entity in result.entities] == ["Q1"]
+    assert relation_requests == ["Q1"]
+
+
+def test_traverse_converts_http_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Root entity-resolution failures use the existing HTTP exception.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: httpx.Response(
+            503, request=httpx.Request("GET", args[0])
+        ),
+    )
+
+    with pytest.raises(WikiReachHTTPError):
+        WikiReach().traverse("Q1")
+
+
+def test_traverse_rejects_malformed_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Malformed root entity data uses the existing response exception.
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: json_response({}))
+
+    with pytest.raises(WikiReachResponseError):
+        WikiReach().traverse("Q1")
+
+
+def test_traverse_resolves_q937_root_label_with_language_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Multilingual labels returned as English fallbacks resolve the traversal root.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        params = kwargs["params"]
+        assert params["languagefallback"] == "1"
+        return json_response(
+            {
+                "entities": {
+                    "Q937": {
+                        "labels": {
+                            "en": {
+                                "language": "mul",
+                                "for-language": "en",
+                                "value": "Albert Einstein",
+                            }
+                        },
+                        "descriptions": {},
+                    }
+                }
+            }
+        )
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    assert WikiReach().traverse("Q937", depth=0).root.label == "Albert Einstein"
+
+
+def test_path_finds_a_direct_relation(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A direct edge produces a one-relation path.
+    mock_traversal(
+        monkeypatch,
+        {"Q1": [("P1", "Q2")]},
+        {"Q1": entity_record("one"), "Q2": entity_record("two")},
+    )
+
+    assert WikiReach().path("Q1", "Q2") == PathResult(
+        (Entity("Q1", "one"), Entity("Q2", "two")),
+        (Relation("P1", "Q1", "Q2"),),
+    )
+
+
+def test_path_finds_a_two_edge_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Parent pointers reconstruct paths longer than one edge.
+    mock_traversal(
+        monkeypatch,
+        {"Q1": [("P1", "Q2")], "Q2": [("P2", "Q3")]},
+        {
+            "Q1": entity_record("one"),
+            "Q2": entity_record("two"),
+            "Q3": entity_record("three"),
+        },
+    )
+
+    result = WikiReach().path("Q1", "Q3")
+
+    assert [entity.id for entity in result.entities] == ["Q1", "Q2", "Q3"]
+    assert [relation.property_id for relation in result.relations] == ["P1", "P2"]
+
+
+def test_path_chooses_shortest_and_first_discovered_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # BFS chooses a direct edge over longer paths and preserves relation ordering.
+    mock_traversal(
+        monkeypatch,
+        {
+            "Q1": [("P1", "Q2"), ("P2", "Q3"), ("P3", "Q4")],
+            "Q2": [("P4", "Q4")],
+            "Q3": [("P5", "Q4")],
+        },
+        {
+            "Q1": entity_record("one"),
+            "Q2": entity_record("two"),
+            "Q3": entity_record("three"),
+            "Q4": entity_record("four"),
+        },
+    )
+
+    result = WikiReach().path("Q1", "Q4")
+
+    assert [entity.id for entity in result.entities] == ["Q1", "Q4"]
+    assert result.relations == (Relation("P3", "Q1", "Q4"),)
+
+
+def test_path_chooses_first_equal_length_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The first relation-discovered parent wins when paths have equal length.
+    mock_traversal(
+        monkeypatch,
+        {
+            "Q1": [("P1", "Q2"), ("P2", "Q3")],
+            "Q2": [("P3", "Q4")],
+            "Q3": [("P4", "Q4")],
+        },
+        {
+            "Q1": entity_record("one"),
+            "Q2": entity_record("two"),
+            "Q3": entity_record("three"),
+            "Q4": entity_record("four"),
+        },
+    )
+
+    assert [entity.id for entity in WikiReach().path("Q1", "Q4").entities] == [
+        "Q1",
+        "Q2",
+        "Q4",
+    ]
+
+
+def test_path_handles_source_equal_to_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A zero-edge path resolves only its shared endpoint.
+    mock_traversal(monkeypatch, {}, {"Q1": entity_record("one")})
+
+    assert WikiReach().path("Q1", "Q1") == PathResult((Entity("Q1", "one"),), ())
+
+
+def test_path_prevents_cycles_and_duplicate_relations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Visited IDs avoid cycles; duplicate edges do not replace the first parent.
+    mock_traversal(
+        monkeypatch,
+        {
+            "Q1": [("P1", "Q2"), ("P1", "Q2")],
+            "Q2": [("P2", "Q1"), ("P3", "Q3")],
+        },
+        {
+            "Q1": entity_record("one"),
+            "Q2": entity_record("two"),
+            "Q3": entity_record("three"),
+        },
+    )
+
+    assert [entity.id for entity in WikiReach().path("Q1", "Q3").entities] == [
+        "Q1",
+        "Q2",
+        "Q3",
+    ]
+
+
+@pytest.mark.parametrize("max_depth", [0, 1])
+def test_path_respects_max_depth(
+    monkeypatch: pytest.MonkeyPatch, max_depth: int
+) -> None:
+    # Targets beyond the permitted number of edges are not found.
+    mock_traversal(
+        monkeypatch,
+        {"Q1": [("P1", "Q2")], "Q2": [("P2", "Q3")]},
+        {
+            "Q1": entity_record("one"),
+            "Q2": entity_record("two"),
+            "Q3": entity_record("three"),
+        },
+    )
+
+    with pytest.raises(PathNotFoundError):
+        WikiReach().path("Q1", "Q3", max_depth=max_depth)
+
+
+def test_path_reports_missing_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Exhausting the graph raises the dedicated path exception.
+    mock_traversal(
+        monkeypatch,
+        {"Q1": [("P1", "Q2")]},
+        {"Q1": entity_record("one"), "Q2": entity_record("two")},
+    )
+
+    with pytest.raises(PathNotFoundError):
+        WikiReach().path("Q1", "Q3")
+
+
+@pytest.mark.parametrize("source_id,target_id", [("P31", "Q2"), ("Q1", "P31")])
+def test_path_rejects_invalid_ids(source_id: str, target_id: str) -> None:
+    # Both path endpoints require valid Q-IDs.
+    with pytest.raises(InvalidEntityIdError):
+        WikiReach().path(source_id, target_id)
+
+
+@pytest.mark.parametrize("max_depth", [-1, True])
+def test_path_rejects_invalid_max_depth(max_depth: int) -> None:
+    # Maximum path depth follows traversal depth validation rules.
+    with pytest.raises(InvalidDepthError):
+        WikiReach().path("Q1", "Q2", max_depth=max_depth)
+
+
+def test_path_rejects_missing_final_entity(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A path cannot be returned with an unresolved final endpoint.
+    mock_traversal(
+        monkeypatch,
+        {"Q1": [("P1", "Q2")]},
+        {"Q1": entity_record("one"), "Q2": {"missing": ""}},
+    )
+
+    with pytest.raises(EntityNotFoundError):
+        WikiReach().path("Q1", "Q2")
+
+
+def test_path_converts_http_and_malformed_responses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Existing HTTP and response errors propagate through path search.
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: json_response({}))
+
+    with pytest.raises(WikiReachResponseError):
+        WikiReach().path("Q1", "Q2")

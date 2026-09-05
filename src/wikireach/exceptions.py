@@ -16,6 +16,16 @@ class InvalidEntityIdError(WikiReachError):
     pass
 
 
+class InvalidDepthError(WikiReachError):
+    # Raised when a traversal depth is invalid.
+    pass
+
+
+class PathNotFoundError(WikiReachError):
+    # Raised when no path exists within the requested depth.
+    pass
+
+
 class EntityNotFoundError(WikiReachError):
     # Raised when a search returns no matching entities.
     pass

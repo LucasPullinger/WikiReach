@@ -7,12 +7,16 @@ import httpx
 from .entity import Entity
 from .exceptions import (
     EntityNotFoundError,
+    InvalidDepthError,
     InvalidEntityIdError,
     InvalidQueryError,
+    PathNotFoundError,
     WikiReachHTTPError,
     WikiReachResponseError,
 )
+from .path import PathResult
 from .relation import Relation
+from .traversal import TraversalResult
 
 
 class WikiReach:
@@ -48,6 +52,7 @@ class WikiReach:
                     "action": "wbgetentities",
                     "ids": entity_id,
                     "languages": "en",
+                    "languagefallback": "1",
                     "props": "labels|descriptions",
                     "format": "json",
                 }
@@ -95,6 +100,111 @@ class WikiReach:
             dict.fromkeys(relation.target_id for relation in self.relations(entity_id))
         )
         return self._entities(target_ids)
+
+    def traverse(self, entity_id: str, depth: int = 1) -> TraversalResult:
+        # Traverse outgoing item-to-item relations breadth-first to a set depth.
+        self._validate_entity_id(entity_id)
+        if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
+            raise InvalidDepthError(
+                "Traversal depth must be an integer greater than or equal to 0."
+            )
+
+        root_entities = self._entities([entity_id])
+        if not root_entities:
+            raise EntityNotFoundError(f"Wikidata entity {entity_id} was not found.")
+
+        entities = root_entities
+        relations: list[Relation] = []
+        visited = {entity_id}
+        frontier = [entity_id]
+
+        for _ in range(depth):
+            discovered_ids: list[str] = []
+            for source_id in frontier:
+                source_relations = self.relations(source_id)
+                relations.extend(source_relations)
+                for relation in source_relations:
+                    if relation.target_id not in visited:
+                        visited.add(relation.target_id)
+                        discovered_ids.append(relation.target_id)
+
+            discovered_entities = self._entities(discovered_ids)
+            entities.extend(discovered_entities)
+            frontier = [entity.id for entity in discovered_entities]
+            if not frontier:
+                break
+
+        return TraversalResult(
+            root=root_entities[0],
+            entities=tuple(entities),
+            relations=tuple(relations),
+        )
+
+    def path(self, source_id: str, target_id: str, max_depth: int = 3) -> PathResult:
+        # Find the shortest outgoing relation path with breadth-first search.
+        self._validate_entity_id(source_id)
+        self._validate_entity_id(target_id)
+        if (
+            isinstance(max_depth, bool)
+            or not isinstance(max_depth, int)
+            or max_depth < 0
+        ):
+            raise InvalidDepthError(
+                "Maximum path depth must be an integer greater than or equal to 0."
+            )
+
+        if source_id == target_id:
+            entities = self._entities([source_id])
+            if not entities:
+                raise EntityNotFoundError(f"Wikidata entity {source_id} was not found.")
+            return PathResult(entities=tuple(entities), relations=())
+
+        parents: dict[str, tuple[str, Relation]] = {}
+        visited = {source_id}
+        frontier = [source_id]
+        found = False
+
+        for _ in range(max_depth):
+            next_frontier: list[str] = []
+            for current_id in frontier:
+                for relation in self.relations(current_id):
+                    next_id = relation.target_id
+                    if next_id in visited:
+                        continue
+                    visited.add(next_id)
+                    parents[next_id] = (current_id, relation)
+                    if next_id == target_id:
+                        found = True
+                        break
+                    next_frontier.append(next_id)
+                if found:
+                    break
+            if found:
+                break
+            frontier = next_frontier
+            if not frontier:
+                break
+
+        if not found:
+            raise PathNotFoundError(
+                f"No path from {source_id} to {target_id} within depth {max_depth}."
+            )
+
+        path_ids = [target_id]
+        path_relations: list[Relation] = []
+        while path_ids[-1] != source_id:
+            parent_id, relation = parents[path_ids[-1]]
+            path_relations.append(relation)
+            path_ids.append(parent_id)
+        path_ids.reverse()
+        path_relations.reverse()
+
+        entities = self._entities(path_ids)
+        if len(entities) != len(path_ids):
+            raise EntityNotFoundError(
+                "A Wikidata entity in the discovered path was not found."
+            )
+        return PathResult(entities=tuple(entities), relations=tuple(path_relations))
 
     def _validate_entity_id(self, entity_id: str) -> None:
         # Validate a Wikidata item identifier.
@@ -150,6 +260,7 @@ class WikiReach:
                     "action": "wbgetentities",
                     "ids": "|".join(batch),
                     "languages": "en",
+                    "languagefallback": "1",
                     "props": "labels",
                     "format": "json",
                 }
@@ -167,6 +278,7 @@ class WikiReach:
                     "action": "wbgetentities",
                     "ids": "|".join(batch),
                     "languages": "en",
+                    "languagefallback": "1",
                     "props": "labels|descriptions",
                     "format": "json",
                 }
