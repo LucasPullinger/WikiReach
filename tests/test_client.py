@@ -576,6 +576,111 @@ def test_claims_preserve_statement_rank_and_id(
     assert result.statement_id == "Q937$8d021124-4ef5-4e1f-b2af-9a6b1c3b707b"
 
 
+def test_claims_convert_references_to_typed_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # References preserve each source record and use the standard typed values.
+    mock_claims(
+        monkeypatch,
+        {
+            "P569": [
+                {
+                    "mainsnak": {
+                        "snaktype": "value",
+                        "datavalue": {"type": "string", "value": "1879"},
+                    },
+                    "references": [
+                        {
+                            "snaks": {
+                                "P248": [
+                                    {
+                                        "snaktype": "value",
+                                        "datavalue": {
+                                            "type": "wikibase-entityid",
+                                            "value": {
+                                                "id": "Q36578",
+                                                "entity-type": "item",
+                                            },
+                                        },
+                                    }
+                                ],
+                                "P854": [
+                                    {
+                                        "snaktype": "value",
+                                        "datavalue": {
+                                            "type": "string",
+                                            "value": "https://example.com/source",
+                                        },
+                                    }
+                                ],
+                            }
+                        },
+                        {
+                            "snaks": {
+                                "P813": [
+                                    {
+                                        "snaktype": "value",
+                                        "datavalue": {
+                                            "type": "time",
+                                            "value": {
+                                                "time": "+2026-09-05T00:00:00Z",
+                                                "precision": 11,
+                                            },
+                                        },
+                                    }
+                                ]
+                            }
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+
+    references = WikiReach().claims("Q937")["P569"][0].references
+
+    assert references == (
+        {
+            "P248": (EntityValue("Q36578", "item"),),
+            "P854": ("https://example.com/source",),
+        },
+        {"P813": (DateValue(2026, 9, 5, "day"),)},
+    )
+
+
+def test_claims_without_references_use_an_empty_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A claim without sources remains simple to consume.
+    mock_claims(monkeypatch, {"P31": [claim({"entity-type": "item", "id": "Q5"})]})
+
+    assert WikiReach().claims("Q937")["P31"][0].references == ()
+
+
+@pytest.mark.parametrize("references", [{}, [{"snaks": "not a mapping"}]])
+def test_claims_reject_malformed_references(
+    monkeypatch: pytest.MonkeyPatch, references: object
+) -> None:
+    # Raw or malformed source records are not exposed through the public model.
+    mock_claims(
+        monkeypatch,
+        {
+            "P31": [
+                {
+                    "mainsnak": {
+                        "snaktype": "value",
+                        "datavalue": {"type": "string", "value": "human"},
+                    },
+                    "references": references,
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(WikiReachResponseError, match="invalid reference"):
+        WikiReach().claims("Q937")
+
+
 @pytest.mark.parametrize("rank", ["best", None, 1])
 def test_claims_reject_invalid_statement_rank(
     monkeypatch: pytest.MonkeyPatch, rank: object

@@ -93,6 +93,15 @@ claim = wiki.claims("Q937")["P166"][0]
 print(claim.rank, claim.statement_id)
 ```
 
+References preserve the sources behind a statement. Each reference is a
+read-only mapping of Wikidata property IDs to typed values:
+
+```python
+claim = wiki.claims("Q937")["P569"][0]
+for reference in claim.references:
+    print(reference.get("P854"))  # Source URL, when Wikidata provides one
+```
+
 Look up the readable metadata behind a property ID:
 
 ```python

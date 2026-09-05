@@ -1,6 +1,6 @@
 # WikiReach tools for exploring relationships in Wikidata.
 
-from .claim import Claim, QualifierValues
+from .claim import Claim, QualifierValues, Reference, References
 from .client import WikiReach
 from .connection import Connection
 from .entity import Entity
@@ -40,6 +40,8 @@ __all__ = [
     "Relation",
     "QuantityValue",
     "QualifierValues",
+    "Reference",
+    "References",
     "WikiReach",
     "WikiReachError",
     "WikiReachHTTPError",

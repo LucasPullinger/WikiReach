@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import TypeAlias
 
 from ._api import BATCH_SIZE, get_payload
-from .claim import Claim, QualifierValues
+from .claim import Claim, QualifierValues, References
 from .connection import Connection
 from .entity import Entity
 from .exceptions import (
@@ -639,6 +639,7 @@ class WikiReach:
             qualifiers=WikiReach._qualifiers_from_payload(claim.get("qualifiers")),
             rank=rank,
             statement_id=statement_id,
+            references=WikiReach._references_from_payload(claim.get("references")),
         )
 
     # Convert a main or qualifier snak into a typed value and its value type.
@@ -667,17 +668,43 @@ class WikiReach:
     def _qualifiers_from_payload(qualifiers: object) -> QualifierValues:
         if qualifiers is None:
             return MappingProxyType({})
-        if not isinstance(qualifiers, dict):
-            raise WikiReachResponseError("Wikidata claim has invalid qualifiers.")
+        return WikiReach._snak_values_from_payload(qualifiers, "qualifiers")
 
+    # Convert a property-keyed snak mapping into immutable typed values.
+    @staticmethod
+    def _snak_values_from_payload(
+        snaks_by_property: object, name: str
+    ) -> QualifierValues:
+        if not isinstance(snaks_by_property, dict):
+            raise WikiReachResponseError(f"Wikidata claim has invalid {name}.")
         values: dict[str, tuple[object, ...]] = {}
-        for property_id, snaks in qualifiers.items():
+        for property_id, snaks in snaks_by_property.items():
             if not isinstance(property_id, str) or not isinstance(snaks, list):
-                raise WikiReachResponseError("Wikidata claim has invalid qualifiers.")
+                raise WikiReachResponseError(f"Wikidata claim has invalid {name}.")
             values[property_id] = tuple(
-                WikiReach._value_from_snak(snak, "qualifier")[0] for snak in snaks
+                WikiReach._value_from_snak(snak, name.removesuffix("s"))[0]
+                for snak in snaks
             )
         return MappingProxyType(values)
+
+    # Convert Wikidata reference records into immutable property-keyed values.
+    @staticmethod
+    def _references_from_payload(references: object) -> References:
+        if references is None:
+            return ()
+        if not isinstance(references, list):
+            raise WikiReachResponseError("Wikidata claim has invalid references.")
+
+        parsed_references = []
+        for reference in references:
+            if not isinstance(reference, dict):
+                raise WikiReachResponseError("Wikidata claim has invalid references.")
+            parsed_references.append(
+                WikiReach._snak_values_from_payload(
+                    reference.get("snaks"), "reference snaks"
+                )
+            )
+        return tuple(parsed_references)
 
     # Convert supported raw Wikidata values to immutable typed models.
     @staticmethod
