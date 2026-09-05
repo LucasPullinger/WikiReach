@@ -1,2 +1,1 @@
-"""Placeholder for Wikidata relation models."""
-
+# Placeholder for Wikidata relation models.

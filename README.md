@@ -9,7 +9,7 @@ The project aims to provide a simple Python interface for working with Wikidata 
 
 WikiReach is in early development.
 
-The current repository contains the initial package structure, development tooling, and tests. Wikidata functionality has not been implemented yet.
+The first release supports English-language Wikidata entity search.
 
 ## Planned Features
 
@@ -33,28 +33,17 @@ The library will focus on Wikidata relationship traversal rather than general Wi
 
 ## Example
 
-The intended API will look similar to this:
-
 ```python
 from wikireach import WikiReach
 
 wiki = WikiReach()
 
-einstein = wiki.search("Albert Einstein")
+entity = wiki.search("Albert Einstein")
 
-print(einstein.id)
-print(einstein.label)
-print(einstein.description)
-
-relations = wiki.neighbors(einstein)
-
-path = wiki.path(
-    "Albert Einstein",
-    "Manhattan Project",
-)
+print(entity.id)          # Q937
+print(entity.label)       # Albert Einstein
+print(entity.description) # German-born theoretical physicist
 ```
-
-The exact API may change while the project remains in early development.
 
 ## Requirements
 
@@ -103,8 +92,10 @@ Editable installation allows changes in `src/wikireach` to apply without reinsta
 │       ├── __init__.py
 │       ├── client.py
 │       ├── entity.py
+│       ├── exceptions.py
 │       └── relation.py
 └── tests/
+    ├── test_client.py
     └── test_import.py
 ```
 
