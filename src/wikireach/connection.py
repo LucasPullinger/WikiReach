@@ -8,7 +8,7 @@ from .relation import Relation
 
 @dataclass(frozen=True, slots=True)
 class Connection:
-    """A shared target and its explanatory relations from two sources."""
+    # A shared target and its explanatory relations from two sources.
 
     entity: Entity
     left_relations: tuple[Relation, ...]

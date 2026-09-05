@@ -1,4 +1,4 @@
-"""Private HTTP access for the Wikidata API."""
+# Private HTTP access for the Wikidata API.
 
 import httpx
 
@@ -11,7 +11,7 @@ BATCH_SIZE = 50
 
 
 def get_payload(params: dict[str, str]) -> object:
-    """Request and decode a Wikidata API response."""
+    # Request and decode a Wikidata API response.
     try:
         response = httpx.get(
             API_URL,

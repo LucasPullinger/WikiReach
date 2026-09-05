@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class Relation:
-    """A directed item-to-item Wikidata relationship."""
+    # A directed item-to-item Wikidata relationship.
 
     property_id: str
     source_id: str

@@ -28,13 +28,13 @@ PropertyFilter: TypeAlias = Collection[str] | None
 
 
 class WikiReach:
-    """Synchronous client for searching and exploring Wikidata."""
+    # Synchronous client for searching and exploring Wikidata.
 
     _ENTITY_ID_PATTERN = re.compile(r"Q[1-9]\d*$")
     _PROPERTY_ID_PATTERN = re.compile(r"P[1-9]\d*$")
 
     def search(self, query: str) -> Entity:
-        """Return the best English Wikidata entity matching ``query``."""
+        # Return the best English Wikidata entity matching the query.
         if not query.strip():
             raise InvalidQueryError("Search query must not be empty.")
 
@@ -50,7 +50,7 @@ class WikiReach:
         )
 
     def entity(self, entity_id: str) -> Entity:
-        """Return an English Wikidata entity for ``entity_id``."""
+        # Return an English Wikidata entity for the given Q-ID.
         self._validate_entity_id(entity_id)
 
         return self._entity_from_lookup_payload(
@@ -68,7 +68,7 @@ class WikiReach:
         )
 
     def claims(self, entity_id: str) -> Claims:
-        """Return typed claims keyed by Wikidata property ID."""
+        # Return typed claims keyed by Wikidata property ID.
         self._validate_entity_id(entity_id)
 
         return self._claims_from_payload(
@@ -90,14 +90,14 @@ class WikiReach:
         resolve_labels: bool = False,
         properties: Collection[str] | None = None,
     ) -> list[Relation]:
-        """Return outgoing item-valued relations, optionally filtered by property."""
+        # Return outgoing item-valued relations, optionally filtered by property.
         allowed_properties = self._validate_properties(properties)
         return self._relations(entity_id, allowed_properties, resolve_labels)
 
     def neighbors(
         self, entity_id: str, *, properties: Collection[str] | None = None
     ) -> list[Entity]:
-        """Return unique outgoing neighbor entities in first-seen relation order."""
+        # Return unique outgoing neighbor entities in first-seen relation order.
         allowed_properties = self._validate_properties(properties)
         target_ids = list(
             dict.fromkeys(
@@ -114,7 +114,7 @@ class WikiReach:
         *,
         properties: Collection[str] | None = None,
     ) -> list[Connection]:
-        """Return outgoing targets shared by two source entities."""
+        # Return outgoing targets shared by two source entities.
         self._validate_entity_id(left_id)
         self._validate_entity_id(right_id)
         allowed_properties = self._validate_properties(properties)
@@ -176,7 +176,7 @@ class WikiReach:
         *,
         properties: Collection[str] | None = None,
     ) -> TraversalResult:
-        """Traverse outgoing item-to-item relations breadth-first to ``depth``."""
+        # Traverse outgoing item-to-item relations breadth-first to the given depth.
         self._validate_entity_id(entity_id)
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
             raise InvalidDepthError(
@@ -223,7 +223,7 @@ class WikiReach:
         *,
         properties: Collection[str] | None = None,
     ) -> PathResult:
-        """Find the shortest outgoing relation path within ``max_depth`` edges."""
+        # Find the shortest outgoing relation path within the maximum number of edges.
         self._validate_entity_id(source_id)
         self._validate_entity_id(target_id)
         if (
