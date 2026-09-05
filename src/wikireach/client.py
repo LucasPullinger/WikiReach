@@ -5,6 +5,7 @@ from collections.abc import Collection
 
 import httpx
 
+from .connection import Connection
 from .entity import Entity
 from .exceptions import (
     EntityNotFoundError,
@@ -102,6 +103,45 @@ class WikiReach:
             )
         )
         return self._entities(target_ids)
+
+    def connections(
+        self,
+        left_id: str,
+        right_id: str,
+        *,
+        properties: Collection[str] | None = None,
+    ) -> list[Connection]:
+        # Return targets directly connected to both source entities.
+        self._validate_entity_id(left_id)
+        self._validate_entity_id(right_id)
+        allowed_properties = self._validate_properties(properties)
+
+        left_relations = self._relations(left_id, allowed_properties)
+        right_relations = self._relations(right_id, allowed_properties)
+        left_by_target = self._relations_by_target(left_relations)
+        right_by_target = self._relations_by_target(right_relations)
+        shared_ids = [
+            target_id for target_id in left_by_target if target_id in right_by_target
+        ]
+
+        return [
+            Connection(
+                entity=entity,
+                left_relations=tuple(left_by_target[entity.id]),
+                right_relations=tuple(right_by_target[entity.id]),
+            )
+            for entity in self._entities(shared_ids)
+        ]
+
+    @staticmethod
+    def _relations_by_target(
+        relations: list[Relation],
+    ) -> dict[str, list[Relation]]:
+        # Group relations by target while retaining relation and target order.
+        grouped: dict[str, list[Relation]] = {}
+        for relation in relations:
+            grouped.setdefault(relation.target_id, []).append(relation)
+        return grouped
 
     def _relations(
         self,

@@ -109,6 +109,19 @@ wiki.neighbors(
 )
 ```
 
+Find direct outgoing targets shared by two entities:
+
+```python
+connections = wiki.connections(
+    "Q937",
+    "Q7186",
+    properties={"P106", "P166"},
+)
+
+for connection in connections:
+    print(connection.entity.label)
+```
+
 Traverse outward through item-to-item relations with breadth-first search:
 
 ```python

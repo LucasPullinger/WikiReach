@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from wikireach import (
+    Connection,
     Entity,
     EntityNotFoundError,
     InvalidDepthError,
@@ -1380,3 +1381,145 @@ def test_path_filters_before_searching_excluded_branches(
 
     assert [entity.id for entity in result.entities] == ["Q1", "Q2", "Q4"]
     assert relation_requests == ["Q1", "Q2"]
+
+
+def test_connections_return_one_shared_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A target referenced by both sources becomes a Connection.
+    mock_traversal(
+        monkeypatch,
+        {"Q1": [("P1", "Q3")], "Q2": [("P2", "Q3")]},
+        {"Q3": entity_record("shared")},
+    )
+
+    assert WikiReach().connections("Q1", "Q2") == [
+        Connection(
+            Entity("Q3", "shared"),
+            (Relation("P1", "Q1", "Q3"),),
+            (Relation("P2", "Q2", "Q3"),),
+        )
+    ]
+
+
+def test_connections_preserve_left_order_and_multiple_shared_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Shared targets follow their first appearance in the left source relations.
+    mock_traversal(
+        monkeypatch,
+        {
+            "Q1": [("P1", "Q4"), ("P2", "Q3"), ("P3", "Q5")],
+            "Q2": [("P4", "Q3"), ("P5", "Q4")],
+        },
+        {"Q3": entity_record("three"), "Q4": entity_record("four")},
+    )
+
+    connections = WikiReach().connections("Q1", "Q2")
+
+    assert [connection.entity.id for connection in connections] == ["Q4", "Q3"]
+
+
+def test_connections_preserve_all_relations_for_each_shared_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Duplicate and multi-property statements remain available as explanations.
+    mock_traversal(
+        monkeypatch,
+        {
+            "Q1": [("P1", "Q3"), ("P1", "Q3"), ("P2", "Q3")],
+            "Q2": [("P4", "Q3"), ("P5", "Q3")],
+        },
+        {"Q3": entity_record("shared")},
+    )
+
+    connection = WikiReach().connections("Q1", "Q2")[0]
+
+    assert [relation.property_id for relation in connection.left_relations] == [
+        "P1",
+        "P1",
+        "P2",
+    ]
+    assert [relation.property_id for relation in connection.right_relations] == [
+        "P4",
+        "P5",
+    ]
+
+
+def test_connections_return_empty_for_no_shared_or_allowed_properties(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No intersection and an empty filter both produce no connections.
+    mock_traversal(
+        monkeypatch,
+        {"Q1": [("P1", "Q3")], "Q2": [("P2", "Q4")]},
+        {"Q3": entity_record("three"), "Q4": entity_record("four")},
+    )
+
+    assert WikiReach().connections("Q1", "Q2") == []
+    assert WikiReach().connections("Q1", "Q2", properties=[]) == []
+
+
+def test_connections_apply_property_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only shared targets reached through allowed properties are retained.
+    mock_traversal(
+        monkeypatch,
+        {
+            "Q1": [("P1", "Q3"), ("P2", "Q4")],
+            "Q2": [("P1", "Q3"), ("P2", "Q4")],
+        },
+        {"Q3": entity_record("three"), "Q4": entity_record("four")},
+    )
+
+    assert [
+        connection.entity.id
+        for connection in WikiReach().connections("Q1", "Q2", properties={"P2"})
+    ] == ["Q4"]
+
+
+@pytest.mark.parametrize("left_id,right_id", [("P1", "Q2"), ("Q1", "P2")])
+def test_connections_reject_invalid_source_ids(left_id: str, right_id: str) -> None:
+    # Both connection sources require valid Q-IDs.
+    with pytest.raises(InvalidEntityIdError):
+        WikiReach().connections(left_id, right_id)
+
+
+def test_connections_reject_invalid_property_ids() -> None:
+    # Connection filters use the shared property-ID validation.
+    with pytest.raises(InvalidPropertyIdError):
+        WikiReach().connections("Q1", "Q2", properties={"Q31"})
+
+
+def test_connections_skip_missing_shared_entities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Shared targets that no longer exist are omitted from the result.
+    mock_traversal(
+        monkeypatch,
+        {"Q1": [("P1", "Q3")], "Q2": [("P2", "Q3")]},
+        {"Q3": {"missing": ""}},
+    )
+
+    assert WikiReach().connections("Q1", "Q2") == []
+
+
+def test_connections_convert_http_and_malformed_responses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Existing HTTP and malformed-response exceptions propagate unchanged.
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: json_response({}))
+
+    with pytest.raises(WikiReachResponseError):
+        WikiReach().connections("Q1", "Q2")
+
+
+def test_connections_convert_http_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    # HTTP failures while retrieving either source propagate unchanged.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: httpx.Response(
+            503, request=httpx.Request("GET", args[0])
+        ),
+    )
+
+    with pytest.raises(WikiReachHTTPError):
+        WikiReach().connections("Q1", "Q2")
