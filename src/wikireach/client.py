@@ -2,9 +2,9 @@
 
 import re
 from collections.abc import Collection
+from typing import TypeAlias
 
-import httpx
-
+from ._api import BATCH_SIZE, get_payload
 from .connection import Connection
 from .entity import Entity
 from .exceptions import (
@@ -14,29 +14,29 @@ from .exceptions import (
     InvalidPropertyIdError,
     InvalidQueryError,
     PathNotFoundError,
-    WikiReachHTTPError,
     WikiReachResponseError,
 )
 from .path import PathResult
 from .relation import Relation
 from .traversal import TraversalResult
 
+Claims: TypeAlias = dict[str, list[object]]
+PropertyFilter: TypeAlias = Collection[str] | None
+
 
 class WikiReach:
-    # Search for entities using the Wikidata API.
+    """Synchronous client for searching and exploring Wikidata."""
 
-    _API_URL = "https://www.wikidata.org/w/api.php"
-    _USER_AGENT = "WikiReach/0.1.0 (https://github.com/wikireach/wikireach)"
     _ENTITY_ID_PATTERN = re.compile(r"Q[1-9]\d*$")
     _PROPERTY_ID_PATTERN = re.compile(r"P[1-9]\d*$")
 
     def search(self, query: str) -> Entity:
-        # Return the best English Wikidata entity matching the query.
+        """Return the best English Wikidata entity matching ``query``."""
         if not query.strip():
             raise InvalidQueryError("Search query must not be empty.")
 
         return self._entity_from_search_payload(
-            self._get_payload(
+            get_payload(
                 {
                     "action": "wbsearchentities",
                     "search": query,
@@ -47,11 +47,11 @@ class WikiReach:
         )
 
     def entity(self, entity_id: str) -> Entity:
-        # Return an English Wikidata entity for a Q-ID.
+        """Return an English Wikidata entity for ``entity_id``."""
         self._validate_entity_id(entity_id)
 
         return self._entity_from_lookup_payload(
-            self._get_payload(
+            get_payload(
                 {
                     "action": "wbgetentities",
                     "ids": entity_id,
@@ -64,12 +64,12 @@ class WikiReach:
             entity_id,
         )
 
-    def claims(self, entity_id: str) -> dict[str, list[object]]:
-        # Return raw main-snak values for an entity's claims, keyed by property ID.
+    def claims(self, entity_id: str) -> Claims:
+        """Return raw main-snak values keyed by Wikidata property ID."""
         self._validate_entity_id(entity_id)
 
         return self._claims_from_payload(
-            self._get_payload(
+            get_payload(
                 {
                     "action": "wbgetentities",
                     "ids": entity_id,
@@ -87,14 +87,14 @@ class WikiReach:
         resolve_labels: bool = False,
         properties: Collection[str] | None = None,
     ) -> list[Relation]:
-        # Return item-valued claims as directed entity relationships.
+        """Return outgoing item-valued relations, optionally filtered by property."""
         allowed_properties = self._validate_properties(properties)
         return self._relations(entity_id, allowed_properties, resolve_labels)
 
     def neighbors(
         self, entity_id: str, *, properties: Collection[str] | None = None
     ) -> list[Entity]:
-        # Return unique, directly connected entities in first-seen relation order.
+        """Return unique outgoing neighbor entities in first-seen relation order."""
         allowed_properties = self._validate_properties(properties)
         target_ids = list(
             dict.fromkeys(
@@ -111,7 +111,7 @@ class WikiReach:
         *,
         properties: Collection[str] | None = None,
     ) -> list[Connection]:
-        # Return targets directly connected to both source entities.
+        """Return outgoing targets shared by two source entities."""
         self._validate_entity_id(left_id)
         self._validate_entity_id(right_id)
         allowed_properties = self._validate_properties(properties)
@@ -173,7 +173,7 @@ class WikiReach:
         *,
         properties: Collection[str] | None = None,
     ) -> TraversalResult:
-        # Traverse outgoing item-to-item relations breadth-first to a set depth.
+        """Traverse outgoing item-to-item relations breadth-first to ``depth``."""
         self._validate_entity_id(entity_id)
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
             raise InvalidDepthError(
@@ -220,7 +220,7 @@ class WikiReach:
         *,
         properties: Collection[str] | None = None,
     ) -> PathResult:
-        # Find the shortest outgoing relation path with breadth-first search.
+        """Find the shortest outgoing relation path within ``max_depth`` edges."""
         self._validate_entity_id(source_id)
         self._validate_entity_id(target_id)
         if (
@@ -355,9 +355,9 @@ class WikiReach:
         # Resolve English labels for unique entity and property IDs in batches.
         labels: dict[str, str | None] = {}
         sorted_ids = sorted(ids)
-        for start in range(0, len(sorted_ids), 50):
-            batch = sorted_ids[start : start + 50]
-            payload = self._get_payload(
+        for start in range(0, len(sorted_ids), BATCH_SIZE):
+            batch = sorted_ids[start : start + BATCH_SIZE]
+            payload = get_payload(
                 {
                     "action": "wbgetentities",
                     "ids": "|".join(batch),
@@ -373,9 +373,9 @@ class WikiReach:
     def _entities(self, entity_ids: list[str]) -> list[Entity]:
         # Resolve entity metadata in batches while preserving the supplied order.
         entities: list[Entity] = []
-        for start in range(0, len(entity_ids), 50):
-            batch = entity_ids[start : start + 50]
-            payload = self._get_payload(
+        for start in range(0, len(entity_ids), BATCH_SIZE):
+            batch = entity_ids[start : start + BATCH_SIZE]
+            payload = get_payload(
                 {
                     "action": "wbgetentities",
                     "ids": "|".join(batch),
@@ -387,24 +387,6 @@ class WikiReach:
             )
             entities.extend(self._entities_from_payload(payload, batch))
         return entities
-
-    def _get_payload(self, params: dict[str, str]) -> object:
-        # Request and decode a Wikidata API response.
-        try:
-            response = httpx.get(
-                self._API_URL,
-                params=params,
-                headers={"User-Agent": self._USER_AGENT},
-                timeout=10.0,
-            )
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPError as error:
-            raise WikiReachHTTPError(
-                "Could not retrieve results from Wikidata."
-            ) from error
-        except ValueError as error:
-            raise WikiReachResponseError("Wikidata returned invalid JSON.") from error
 
     @staticmethod
     def _entity_from_search_payload(payload: object) -> Entity:
@@ -448,16 +430,14 @@ class WikiReach:
         return Entity(id=entity_id, label=label, description=description)
 
     @staticmethod
-    def _claims_from_payload(
-        payload: object, entity_id: str
-    ) -> dict[str, list[object]]:
+    def _claims_from_payload(payload: object, entity_id: str) -> Claims:
         # Extract raw main-snak values from a wbgetentities response.
         result = WikiReach._entity_data_from_payload(payload, entity_id)
         claims = result.get("claims")
         if not isinstance(claims, dict):
             raise WikiReachResponseError("Wikidata entity has invalid claims.")
 
-        clean_claims: dict[str, list[object]] = {}
+        clean_claims: Claims = {}
         for property_id, property_claims in claims.items():
             if not isinstance(property_id, str) or not isinstance(
                 property_claims, list

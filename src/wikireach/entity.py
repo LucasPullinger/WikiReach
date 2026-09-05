@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class Entity:
-    # A Wikidata entity returned by a search.
+    """A resolved Wikidata entity."""
 
     id: str
     label: str
