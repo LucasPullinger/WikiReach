@@ -3,10 +3,11 @@
 import re
 from collections.abc import Collection
 from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
 from typing import TypeAlias
 
 from ._api import BATCH_SIZE, get_payload
-from .claim import Claim
+from .claim import Claim, QualifierValues
 from .connection import Connection
 from .entity import Entity
 from .exceptions import (
@@ -623,16 +624,23 @@ class WikiReach:
         if not isinstance(claim, dict):
             raise WikiReachResponseError("Wikidata entity has an invalid claim.")
         snak = claim.get("mainsnak")
+        value, value_type = WikiReach._value_from_snak(snak, "main")
+        return Claim(
+            property_id=property_id,
+            source_id=source_id,
+            value=value,
+            value_type=value_type,
+            qualifiers=WikiReach._qualifiers_from_payload(claim.get("qualifiers")),
+        )
+
+    # Convert a main or qualifier snak into a typed value and its value type.
+    @staticmethod
+    def _value_from_snak(snak: object, name: str) -> tuple[object, str]:
         if not isinstance(snak, dict):
-            raise WikiReachResponseError("Wikidata claim is missing a main snak.")
+            raise WikiReachResponseError(f"Wikidata claim is missing a {name} snak.")
         snak_type = snak.get("snaktype")
         if snak_type in {"somevalue", "novalue"}:
-            return Claim(
-                property_id=property_id,
-                source_id=source_id,
-                value=None,
-                value_type=snak_type,
-            )
+            return None, snak_type
         if snak_type != "value":
             raise WikiReachResponseError("Wikidata claim has an invalid snak type.")
         data_value = snak.get("datavalue")
@@ -641,12 +649,27 @@ class WikiReach:
         value_type = data_value.get("type")
         if value_type is not None and not isinstance(value_type, str):
             raise WikiReachResponseError("Wikidata claim has an invalid value type.")
-        return Claim(
-            property_id=property_id,
-            source_id=source_id,
-            value=WikiReach._typed_value(data_value["value"], value_type),
-            value_type=value_type or "unknown",
+        return (
+            WikiReach._typed_value(data_value["value"], value_type),
+            value_type or "unknown",
         )
+
+    # Convert Wikidata qualifier snaks into immutable, property-keyed typed values.
+    @staticmethod
+    def _qualifiers_from_payload(qualifiers: object) -> QualifierValues:
+        if qualifiers is None:
+            return MappingProxyType({})
+        if not isinstance(qualifiers, dict):
+            raise WikiReachResponseError("Wikidata claim has invalid qualifiers.")
+
+        values: dict[str, tuple[object, ...]] = {}
+        for property_id, snaks in qualifiers.items():
+            if not isinstance(property_id, str) or not isinstance(snaks, list):
+                raise WikiReachResponseError("Wikidata claim has invalid qualifiers.")
+            values[property_id] = tuple(
+                WikiReach._value_from_snak(snak, "qualifier")[0] for snak in snaks
+            )
+        return MappingProxyType(values)
 
     # Convert supported raw Wikidata values to immutable typed models.
     @staticmethod

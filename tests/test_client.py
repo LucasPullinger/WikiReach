@@ -469,6 +469,108 @@ def test_claims_convert_time_and_quantity_values(
     assert claims["P2048"][0].value == QuantityValue(Decimal("42"))
 
 
+def test_claims_convert_qualifiers_to_typed_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Qualifiers retain their property IDs and use the same typed values as claims.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: json_response(
+            {
+                "entities": {
+                    "Q937": {
+                        "claims": {
+                            "P166": [
+                                {
+                                    "mainsnak": {
+                                        "snaktype": "value",
+                                        "datavalue": {
+                                            "type": "wikibase-entityid",
+                                            "value": {
+                                                "id": "Q38104",
+                                                "entity-type": "item",
+                                            },
+                                        },
+                                    },
+                                    "qualifiers": {
+                                        "P585": [
+                                            {
+                                                "snaktype": "value",
+                                                "datavalue": {
+                                                    "type": "time",
+                                                    "value": {
+                                                        "time": "+1922-01-01T00:00:00Z",
+                                                        "precision": 9,
+                                                    },
+                                                },
+                                            }
+                                        ],
+                                        "P1545": [
+                                            {
+                                                "snaktype": "value",
+                                                "datavalue": {
+                                                    "type": "string",
+                                                    "value": "1",
+                                                },
+                                            },
+                                            {
+                                                "snaktype": "value",
+                                                "datavalue": {
+                                                    "type": "string",
+                                                    "value": "2",
+                                                },
+                                            },
+                                        ],
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        ),
+    )
+
+    claim = WikiReach().claims("Q937")["P166"][0]
+
+    assert claim.value == EntityValue("Q38104", "item")
+    assert claim.qualifiers == {
+        "P585": (DateValue(1922, 1, 1, "year"),),
+        "P1545": ("1", "2"),
+    }
+
+
+def test_claims_without_qualifiers_use_an_empty_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A claim without Wikidata qualifiers remains simple to consume.
+    mock_claims(monkeypatch, {"P31": [claim({"entity-type": "item", "id": "Q5"})]})
+
+    assert WikiReach().claims("Q937")["P31"][0].qualifiers == {}
+
+
+def test_claims_reject_malformed_qualifiers(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Qualifier parsing rejects malformed data rather than exposing raw API payloads.
+    mock_claims(
+        monkeypatch,
+        {
+            "P31": [
+                {
+                    "mainsnak": {
+                        "snaktype": "value",
+                        "datavalue": {"type": "string", "value": "human"},
+                    },
+                    "qualifiers": {"P585": "not a list"},
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(WikiReachResponseError, match="invalid qualifiers"):
+        WikiReach().claims("Q937")
+
+
 def test_claims_returns_empty_mapping_for_entity_without_claims(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

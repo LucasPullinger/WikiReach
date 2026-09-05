@@ -29,7 +29,12 @@ einstein = wiki.entity("Albert Einstein")
 print(einstein.id, einstein.label)
 # Q937 Albert Einstein
 
-print([entity.label for entity in wiki.neighbors("Albert Einstein", properties={"P19", "P106"})])
+print(
+    [
+        entity.label
+        for entity in wiki.neighbors("Albert Einstein", properties={"P19", "P106"})
+    ]
+)
 # ['Ulm', 'physicist', ...]
 ```
 
@@ -46,15 +51,15 @@ from wikireach import WikiReach
 
 wiki = WikiReach()
 
-wiki.search("Albert Einstein")                  # Best matching Entity
-wiki.entity("Albert Einstein")                   # Entity by name or Q-ID
-wiki.property("P31")                             # Property metadata by P-ID
-wiki.claims("Albert Einstein")                   # Typed claims grouped by P-ID
-wiki.relations("Albert Einstein")                # Outgoing Relation objects
-wiki.neighbors("Albert Einstein")                # Unique outgoing Entity objects
-wiki.traverse("Albert Einstein", depth=2)        # TraversalResult
-wiki.path("Albert Einstein", "human")           # Shortest outgoing PathResult
-wiki.connections("Albert Einstein", "Marie Curie") # Shared outgoing Connection objects
+wiki.search("Albert Einstein")  # Best matching Entity
+wiki.entity("Albert Einstein")  # Entity by name or Q-ID
+wiki.property("P31")  # Property metadata by P-ID
+wiki.claims("Albert Einstein")  # Typed claims grouped by P-ID
+wiki.relations("Albert Einstein")  # Outgoing Relation objects
+wiki.neighbors("Albert Einstein")  # Unique outgoing Entity objects
+wiki.traverse("Albert Einstein", depth=2)  # TraversalResult
+wiki.path("Albert Einstein", "human")  # Shortest outgoing PathResult
+wiki.connections("Albert Einstein", "Marie Curie")  # Shared outgoing Connection objects
 ```
 
 Search and direct lookup:
@@ -69,6 +74,15 @@ Inspect typed claims without parsing Wikidata's raw response structure:
 ```python
 claim = wiki.claims("Q937")["P569"][0]
 print(claim.property_id, claim.value, claim.value_type)
+```
+
+Claims can also carry contextual qualifier values. They remain grouped by their
+Wikidata property ID and use the same typed value models as a claim's main value:
+
+```python
+claim = wiki.claims("Q937")["P166"][0]
+for property_id, values in claim.qualifiers.items():
+    print(property_id, values)
 ```
 
 Look up the readable metadata behind a property ID:
