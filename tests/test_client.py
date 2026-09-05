@@ -19,6 +19,7 @@ from wikireach import (
     InvalidQueryError,
     PathNotFoundError,
     PathResult,
+    Property,
     QuantityValue,
     Relation,
     TraversalResult,
@@ -1599,3 +1600,47 @@ def test_connections_convert_http_failures(monkeypatch: pytest.MonkeyPatch) -> N
 
     with pytest.raises(WikiReachHTTPError):
         WikiReach().connections("Q1", "Q2")
+
+
+def test_property_returns_english_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Property lookup returns typed metadata without exposing raw API data.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        params = kwargs["params"]
+        assert params["ids"] == "P31"
+        assert params["props"] == "labels|descriptions|datatype"
+        return json_response(
+            {
+                "entities": {
+                    "P31": {
+                        "labels": {"en": {"value": "instance of"}},
+                        "descriptions": {"en": {"value": "class membership"}},
+                        "datatype": "wikibase-item",
+                    }
+                }
+            }
+        )
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    assert WikiReach().property("P31") == Property(
+        "P31", "instance of", "class membership", "wikibase-item"
+    )
+
+
+@pytest.mark.parametrize("property_id", ["", "31", "Q31", "PABC"])
+def test_property_rejects_invalid_ids(property_id: str) -> None:
+    # Property lookup uses the existing P-ID validation exception.
+    with pytest.raises(InvalidPropertyIdError):
+        WikiReach().property(property_id)
+
+
+def test_property_rejects_malformed_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Missing required property metadata raises a WikiReach response error.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: json_response({"entities": {"P31": {}}}),
+    )
+
+    with pytest.raises(WikiReachResponseError):
+        WikiReach().property("P31")

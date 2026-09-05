@@ -16,6 +16,7 @@ from .exceptions import (
     WikiReachResponseError,
 )
 from .path import PathResult
+from .property import Property
 from .relation import Relation
 from .traversal import TraversalResult
 from .value import DateValue, EntityValue, QuantityValue
@@ -35,6 +36,7 @@ __all__ = [
     "InvalidPropertyIdError",
     "PathNotFoundError",
     "PathResult",
+    "Property",
     "Relation",
     "QuantityValue",
     "WikiReach",

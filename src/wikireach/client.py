@@ -19,6 +19,7 @@ from .exceptions import (
     WikiReachResponseError,
 )
 from .path import PathResult
+from .property import Property
 from .relation import Relation
 from .traversal import TraversalResult
 from .value import DateValue, EntityValue, QuantityValue
@@ -81,6 +82,23 @@ class WikiReach:
                 }
             ),
             entity_id,
+        )
+
+    def property(self, property_id: str) -> Property:
+        # Return English metadata for a Wikidata property ID.
+        self._validate_property_id(property_id)
+        return self._property_from_lookup_payload(
+            get_payload(
+                {
+                    "action": "wbgetentities",
+                    "ids": property_id,
+                    "languages": "en",
+                    "languagefallback": "1",
+                    "props": "labels|descriptions|datatype",
+                    "format": "json",
+                }
+            ),
+            property_id,
         )
 
     def relations(
@@ -320,6 +338,15 @@ class WikiReach:
             )
         return property_ids
 
+    def _validate_property_id(self, property_id: str) -> None:
+        # Validate a Wikidata property identifier.
+        if not isinstance(property_id, str) or not self._PROPERTY_ID_PATTERN.fullmatch(
+            property_id
+        ):
+            raise InvalidPropertyIdError(
+                "Property ID must be a Wikidata P-ID such as 'P31'."
+            )
+
     def _entity_target_id(self, claim: Claim) -> str | None:
         # Return a valid target Q-ID when a claim value references an item.
         if not isinstance(claim.value, EntityValue):
@@ -450,6 +477,22 @@ class WikiReach:
                 for claim in property_claims
             ]
         return clean_claims
+
+    @staticmethod
+    def _property_from_lookup_payload(payload: object, property_id: str) -> Property:
+        # Convert a wbgetentities response into a Property.
+        result = WikiReach._entity_data_from_payload(payload, property_id)
+        datatype = result.get("datatype")
+        if not isinstance(datatype, str):
+            raise WikiReachResponseError("Wikidata property is missing a datatype.")
+        return Property(
+            id=property_id,
+            label=WikiReach._optional_localized_value(result.get("labels"), "label"),
+            description=WikiReach._optional_localized_value(
+                result.get("descriptions"), "description"
+            ),
+            datatype=datatype,
+        )
 
     @staticmethod
     def _entity_data_from_payload(

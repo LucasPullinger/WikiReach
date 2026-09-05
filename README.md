@@ -24,6 +24,7 @@ wiki = WikiReach()
 
 wiki.search("Albert Einstein")       # Best matching Entity
 wiki.entity("Q937")                  # Entity by Q-ID
+wiki.property("P31")                 # Property metadata by P-ID
 wiki.claims("Q937")                  # Typed Claim objects grouped by P-ID
 wiki.relations("Q937")               # Outgoing Relation objects
 wiki.neighbors("Q937")               # Unique outgoing Entity objects
@@ -44,6 +45,14 @@ Inspect typed claims without parsing Wikidata's raw response structure:
 ```python
 claim = wiki.claims("Q937")["P569"][0]
 print(claim.property_id, claim.value, claim.value_type)
+```
+
+Look up the readable metadata behind a property ID:
+
+```python
+property_ = wiki.property("P31")
+print(property_.label, property_.datatype)
+# instance of wikibase-item
 ```
 
 Limit graph operations to Wikidata property IDs, which define allowed edge
