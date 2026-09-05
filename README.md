@@ -75,6 +75,19 @@ for relation in wiki.relations("Q937"):
 # P106 Q169470
 ```
 
+Relations are ID-only by default. Resolve English labels when displaying them:
+
+```python
+for relation in wiki.relations("Q937", resolve_labels=True):
+    print(
+        f"{relation.property_label or relation.property_id} -> "
+        f"{relation.target_label or relation.target_id}"
+    )
+
+# instance of -> human
+# place of birth -> Ulm
+```
+
 ## Requirements
 
 * Python 3.11 or later

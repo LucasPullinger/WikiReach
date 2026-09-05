@@ -71,7 +71,9 @@ class WikiReach:
             entity_id,
         )
 
-    def relations(self, entity_id: str) -> list[Relation]:
+    def relations(
+        self, entity_id: str, *, resolve_labels: bool = False
+    ) -> list[Relation]:
         # Return item-valued claims as directed entity relationships.
         relations: list[Relation] = []
         for property_id, values in self.claims(entity_id).items():
@@ -85,7 +87,7 @@ class WikiReach:
                             target_id=target_id,
                         )
                     )
-        return relations
+        return self._relations_with_labels(relations) if resolve_labels else relations
 
     def _validate_entity_id(self, entity_id: str) -> None:
         # Validate a Wikidata item identifier.
@@ -106,6 +108,47 @@ class WikiReach:
         ):
             return None
         return target_id
+
+    def _relations_with_labels(self, relations: list[Relation]) -> list[Relation]:
+        # Add optional English labels to relations with a single set of batches.
+        if not relations:
+            return []
+
+        ids = (
+            {relation.source_id for relation in relations}
+            | {relation.property_id for relation in relations}
+            | {relation.target_id for relation in relations}
+        )
+        labels = self._labels(ids)
+        return [
+            Relation(
+                property_id=relation.property_id,
+                source_id=relation.source_id,
+                target_id=relation.target_id,
+                property_label=labels[relation.property_id],
+                source_label=labels[relation.source_id],
+                target_label=labels[relation.target_id],
+            )
+            for relation in relations
+        ]
+
+    def _labels(self, ids: set[str]) -> dict[str, str | None]:
+        # Resolve English labels for unique entity and property IDs in batches.
+        labels: dict[str, str | None] = {}
+        sorted_ids = sorted(ids)
+        for start in range(0, len(sorted_ids), 50):
+            batch = sorted_ids[start : start + 50]
+            payload = self._get_payload(
+                {
+                    "action": "wbgetentities",
+                    "ids": "|".join(batch),
+                    "languages": "en",
+                    "props": "labels",
+                    "format": "json",
+                }
+            )
+            labels.update(self._labels_from_payload(payload, batch))
+        return labels
 
     def _get_payload(self, params: dict[str, str]) -> object:
         # Request and decode a Wikidata API response.
@@ -206,6 +249,46 @@ class WikiReach:
         if "missing" in result:
             raise EntityNotFoundError(f"Wikidata entity {entity_id} was not found.")
         return result
+
+    @staticmethod
+    def _labels_from_payload(
+        payload: object, requested_ids: list[str]
+    ) -> dict[str, str | None]:
+        # Extract requested English labels from a wbgetentities response.
+        if not isinstance(payload, dict):
+            raise WikiReachResponseError("Wikidata returned an invalid response.")
+        entities = payload.get("entities")
+        if not isinstance(entities, dict):
+            raise WikiReachResponseError("Wikidata response is missing entities.")
+
+        labels: dict[str, str | None] = {}
+        for entity_id in requested_ids:
+            entity = entities.get(entity_id)
+            if not isinstance(entity, dict):
+                raise WikiReachResponseError(
+                    "Wikidata response is missing entity data."
+                )
+            if "missing" in entity:
+                labels[entity_id] = None
+                continue
+
+            label_data = entity.get("labels")
+            if label_data is None:
+                labels[entity_id] = None
+                continue
+            if not isinstance(label_data, dict):
+                raise WikiReachResponseError("Wikidata entity has an invalid label.")
+            english = label_data.get("en")
+            if english is None:
+                labels[entity_id] = None
+                continue
+            if not isinstance(english, dict):
+                raise WikiReachResponseError("Wikidata entity has an invalid label.")
+            value = english.get("value")
+            if not isinstance(value, str):
+                raise WikiReachResponseError("Wikidata entity has an invalid label.")
+            labels[entity_id] = value
+        return labels
 
     @staticmethod
     def _claim_value(claim: object) -> object:

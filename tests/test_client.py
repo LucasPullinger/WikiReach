@@ -43,6 +43,34 @@ def mock_claims(
     )
 
 
+def mock_relations_with_labels(
+    monkeypatch: pytest.MonkeyPatch,
+    claims: dict[str, list[object]],
+    label_entities: dict[str, object],
+    label_requests: list[str] | None = None,
+) -> None:
+    # Mock claims and label responses for relation resolution.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        params = kwargs["params"]
+        if params["props"] == "claims":
+            return json_response({"entities": {"Q937": {"claims": claims}}})
+
+        assert params["props"] == "labels"
+        if label_requests is not None:
+            label_requests.append(params["ids"])
+        requested_ids = params["ids"].split("|")
+        return json_response(
+            {
+                "entities": {
+                    entity_id: label_entities.get(entity_id, {"missing": ""})
+                    for entity_id in requested_ids
+                }
+            }
+        )
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+
 def test_search_returns_best_entity(monkeypatch: pytest.MonkeyPatch) -> None:
     # A search returns the first entity from Wikidata.
     def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
@@ -443,3 +471,137 @@ def test_relations_rejects_invalid_source_id() -> None:
     # Relation lookup reuses Q-ID validation through claims().
     with pytest.raises(InvalidEntityIdError):
         WikiReach().relations("P31")
+
+
+def test_relations_are_unresolved_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Existing calls retain ID-only relation results.
+    mock_claims(monkeypatch, {"P31": [claim({"entity-type": "item", "id": "Q5"})]})
+
+    assert WikiReach().relations("Q937") == [Relation("P31", "Q937", "Q5")]
+
+
+def test_relations_resolve_source_property_and_target_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Opt-in resolution adds labels while retaining all original IDs.
+    mock_relations_with_labels(
+        monkeypatch,
+        {"P31": [claim({"entity-type": "item", "id": "Q5"})]},
+        {
+            "Q937": {"labels": {"en": {"value": "Albert Einstein"}}},
+            "P31": {"labels": {"en": {"value": "instance of"}}},
+            "Q5": {"labels": {"en": {"value": "human"}}},
+        },
+    )
+
+    assert WikiReach().relations("Q937", resolve_labels=True) == [
+        Relation(
+            property_id="P31",
+            source_id="Q937",
+            target_id="Q5",
+            property_label="instance of",
+            source_label="Albert Einstein",
+            target_label="human",
+        )
+    ]
+
+
+def test_relations_resolve_multiple_targets_in_one_unique_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Duplicate source and property IDs are requested only once.
+    label_requests: list[str] = []
+    mock_relations_with_labels(
+        monkeypatch,
+        {
+            "P106": [
+                claim({"entity-type": "item", "id": "Q169470"}),
+                claim({"entity-type": "item", "id": "Q901"}),
+                claim({"entity-type": "item", "id": "Q901"}),
+            ]
+        },
+        {
+            "Q937": {"labels": {"en": {"value": "Albert Einstein"}}},
+            "P106": {"labels": {"en": {"value": "occupation"}}},
+            "Q169470": {"labels": {"en": {"value": "physicist"}}},
+            "Q901": {"labels": {"en": {"value": "scientist"}}},
+        },
+        label_requests,
+    )
+
+    relations = WikiReach().relations("Q937", resolve_labels=True)
+
+    assert len(label_requests) == 1
+    assert set(label_requests[0].split("|")) == {"Q937", "P106", "Q169470", "Q901"}
+    assert [relation.target_label for relation in relations] == [
+        "physicist",
+        "scientist",
+        "scientist",
+    ]
+
+
+def test_relations_keep_missing_english_labels_as_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Label resolution tolerates entities and properties without English labels.
+    mock_relations_with_labels(
+        monkeypatch,
+        {"P31": [claim({"entity-type": "item", "id": "Q5"})]},
+        {"Q937": {"labels": {}}, "P31": {"labels": {}}, "Q5": {"labels": {}}},
+    )
+
+    relation = WikiReach().relations("Q937", resolve_labels=True)[0]
+
+    assert relation.property_label is None
+    assert relation.source_label is None
+    assert relation.target_label is None
+
+
+def test_relations_reject_malformed_label_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Malformed label payloads retain the existing response-error model.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        if kwargs["params"]["props"] == "claims":
+            return json_response(
+                {
+                    "entities": {
+                        "Q937": {
+                            "claims": {
+                                "P31": [claim({"entity-type": "item", "id": "Q5"})]
+                            }
+                        }
+                    }
+                }
+            )
+        return json_response({"entities": {"Q937": {"labels": "invalid"}}})
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    with pytest.raises(WikiReachResponseError):
+        WikiReach().relations("Q937", resolve_labels=True)
+
+
+def test_relations_convert_label_http_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # HTTP failures during label resolution use the existing exception type.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        if kwargs["params"]["props"] == "claims":
+            return json_response(
+                {
+                    "entities": {
+                        "Q937": {
+                            "claims": {
+                                "P31": [claim({"entity-type": "item", "id": "Q5"})]
+                            }
+                        }
+                    }
+                }
+            )
+        return httpx.Response(503, request=httpx.Request("GET", args[0]))
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    with pytest.raises(WikiReachHTTPError):
+        WikiReach().relations("Q937", resolve_labels=True)

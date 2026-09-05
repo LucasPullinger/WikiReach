@@ -10,3 +10,6 @@ class Relation:
     property_id: str
     source_id: str
     target_id: str
+    property_label: str | None = None
+    source_label: str | None = None
+    target_label: str | None = None
