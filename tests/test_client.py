@@ -7,6 +7,7 @@ import pytest
 
 from wikireach import (
     EntityNotFoundError,
+    InvalidEntityIdError,
     InvalidQueryError,
     WikiReach,
     WikiReachHTTPError,
@@ -102,3 +103,85 @@ def test_search_rejects_invalid_response(
 
     with pytest.raises(WikiReachResponseError):
         WikiReach().search("Albert Einstein")
+
+
+def test_entity_returns_requested_entity(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A Q-ID lookup returns the requested entity's English metadata.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        request = httpx.Request("GET", args[0], params=kwargs["params"])
+        assert request.url.params["action"] == "wbgetentities"
+        assert request.url.params["ids"] == "Q937"
+        assert request.url.params["languages"] == "en"
+        assert request.url.params["props"] == "labels|descriptions"
+        return httpx.Response(
+            200,
+            json={
+                "entities": {
+                    "Q937": {
+                        "labels": {"en": {"value": "Albert Einstein"}},
+                        "descriptions": {
+                            "en": {"value": "German-born theoretical physicist"}
+                        },
+                    }
+                }
+            },
+            request=request,
+        )
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    entity = WikiReach().entity("Q937")
+
+    assert entity.id == "Q937"
+    assert entity.label == "Albert Einstein"
+    assert entity.description == "German-born theoretical physicist"
+
+
+@pytest.mark.parametrize("entity_id", ["", "937", "P31", "QABC", "Q 937"])
+def test_entity_rejects_invalid_ids(entity_id: str) -> None:
+    # Invalid Q-ID formats fail before a request is made.
+    with pytest.raises(InvalidEntityIdError, match="must be a Wikidata Q-ID"):
+        WikiReach().entity(entity_id)
+
+
+def test_entity_raises_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A missing Wikidata entity raises a clear exception.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: json_response(
+            {"entities": {"Q999999999": {"missing": ""}}}
+        ),
+    )
+
+    with pytest.raises(EntityNotFoundError, match="Q999999999"):
+        WikiReach().entity("Q999999999")
+
+
+def test_entity_converts_http_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    # HTTP failures are exposed as WikiReach errors.
+    def mock_get(*args: Any, **kwargs: Any) -> httpx.Response:
+        return httpx.Response(500, request=httpx.Request("GET", args[0]))
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    with pytest.raises(WikiReachHTTPError, match="Could not retrieve"):
+        WikiReach().entity("Q937")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"entities": {"Q937": {}}},
+        {"entities": {"Q937": {"labels": {"en": {}}}}},
+    ],
+)
+def test_entity_rejects_invalid_response(
+    monkeypatch: pytest.MonkeyPatch, payload: object
+) -> None:
+    # Malformed lookup payloads are exposed as WikiReach errors.
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: json_response(payload))
+
+    with pytest.raises(WikiReachResponseError):
+        WikiReach().entity("Q937")

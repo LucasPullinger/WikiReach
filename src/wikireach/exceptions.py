@@ -11,6 +11,11 @@ class InvalidQueryError(WikiReachError):
     pass
 
 
+class InvalidEntityIdError(WikiReachError):
+    # Raised when an entity ID is invalid.
+    pass
+
+
 class EntityNotFoundError(WikiReachError):
     # Raised when a search returns no matching entities.
     pass

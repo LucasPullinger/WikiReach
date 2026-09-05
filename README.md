@@ -45,6 +45,14 @@ print(entity.label)       # Albert Einstein
 print(entity.description) # German-born theoretical physicist
 ```
 
+Look up a known entity directly by its Wikidata Q-ID:
+
+```python
+entity = wiki.entity("Q937")
+
+print(entity.label)  # Albert Einstein
+```
+
 ## Requirements
 
 * Python 3.11 or later
