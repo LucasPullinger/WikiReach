@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Collection
+from decimal import Decimal, InvalidOperation
 from typing import TypeAlias
 
 from ._api import BATCH_SIZE, get_payload
@@ -20,6 +21,7 @@ from .exceptions import (
 from .path import PathResult
 from .relation import Relation
 from .traversal import TraversalResult
+from .value import DateValue, EntityValue, QuantityValue
 
 Claims: TypeAlias = dict[str, list[Claim]]
 PropertyFilter: TypeAlias = Collection[str] | None
@@ -320,17 +322,13 @@ class WikiReach:
 
     def _entity_target_id(self, claim: Claim) -> str | None:
         # Return a valid target Q-ID when a claim value references an item.
-        if claim.value_type != "wikibase-entityid":
+        if not isinstance(claim.value, EntityValue):
             return None
-        value = claim.value
-        if not isinstance(value, dict) or value.get("entity-type") != "item":
+        if claim.value.entity_type != "item":
             return None
-        target_id = value.get("id")
-        if not isinstance(target_id, str) or not self._ENTITY_ID_PATTERN.fullmatch(
-            target_id
-        ):
+        if not self._ENTITY_ID_PATTERN.fullmatch(claim.value.id):
             return None
-        return target_id
+        return claim.value.id
 
     def _relations_with_labels(self, relations: list[Relation]) -> list[Relation]:
         # Add optional English labels to relations with a single set of batches.
@@ -570,8 +568,77 @@ class WikiReach:
         return Claim(
             property_id=property_id,
             source_id=source_id,
-            value=data_value["value"],
+            value=WikiReach._typed_value(data_value["value"], value_type),
             value_type=value_type or "unknown",
+        )
+
+    @staticmethod
+    def _typed_value(value: object, value_type: str | None) -> object:
+        # Convert supported raw Wikidata values to immutable typed models.
+        if value_type == "wikibase-entityid":
+            if not isinstance(value, dict):
+                raise WikiReachResponseError("Wikidata entity value is invalid.")
+            entity_id = value.get("id")
+            entity_type = value.get("entity-type")
+            if not isinstance(entity_id, str) or not isinstance(entity_type, str):
+                raise WikiReachResponseError("Wikidata entity value is invalid.")
+            return EntityValue(id=entity_id, entity_type=entity_type)
+        if value_type == "time":
+            return WikiReach._date_value(value)
+        if value_type == "quantity":
+            return WikiReach._quantity_value(value)
+        return value
+
+    @staticmethod
+    def _date_value(value: object) -> DateValue:
+        # Parse a Wikidata time value.
+        if not isinstance(value, dict):
+            raise WikiReachResponseError("Wikidata time value is invalid.")
+        raw_time = value.get("time")
+        precision = value.get("precision")
+        match = (
+            re.fullmatch(r"([+-])(\d+)-(\d{2})-(\d{2})T.*", raw_time)
+            if isinstance(raw_time, str)
+            else None
+        )
+        if not match or not isinstance(precision, int):
+            raise WikiReachResponseError("Wikidata time value is invalid.")
+        sign, year, month, day = match.groups()
+        precision_names = {
+            9: "year",
+            10: "month",
+            11: "day",
+            12: "hour",
+            13: "minute",
+            14: "second",
+        }
+        calendar_model = value.get("calendarmodel")
+        return DateValue(
+            year=int(year) * (-1 if sign == "-" else 1),
+            month=int(month),
+            day=int(day),
+            precision=precision_names.get(precision, str(precision)),
+            calendar_model=calendar_model if isinstance(calendar_model, str) else None,
+        )
+
+    @staticmethod
+    def _quantity_value(value: object) -> QuantityValue:
+        # Parse a Wikidata quantity value.
+        if not isinstance(value, dict):
+            raise WikiReachResponseError("Wikidata quantity value is invalid.")
+        raw_amount = value.get("amount")
+        raw_unit = value.get("unit")
+        if not isinstance(raw_amount, str) or not isinstance(raw_unit, str):
+            raise WikiReachResponseError("Wikidata quantity value is invalid.")
+        try:
+            amount = Decimal(raw_amount)
+        except InvalidOperation as error:
+            raise WikiReachResponseError(
+                "Wikidata quantity value is invalid."
+            ) from error
+        return QuantityValue(
+            amount=amount,
+            unit=None if raw_unit == "1" else raw_unit.rsplit("/", maxsplit=1)[-1],
         )
 
     @staticmethod

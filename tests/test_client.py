@@ -1,5 +1,6 @@
 # Tests for the WikiReach client.
 
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -8,14 +9,17 @@ import pytest
 from wikireach import (
     Claim,
     Connection,
+    DateValue,
     Entity,
     EntityNotFoundError,
+    EntityValue,
     InvalidDepthError,
     InvalidEntityIdError,
     InvalidPropertyIdError,
     InvalidQueryError,
     PathNotFoundError,
     PathResult,
+    QuantityValue,
     Relation,
     TraversalResult,
     WikiReach,
@@ -342,7 +346,10 @@ def test_claims_returns_multiple_properties_and_values(
                                     "mainsnak": {
                                         "snaktype": "value",
                                         "datavalue": {
-                                            "value": {"id": "Q5"},
+                                            "value": {
+                                                "id": "Q5",
+                                                "entity-type": "item",
+                                            },
                                             "type": "wikibase-entityid",
                                         },
                                     }
@@ -380,7 +387,7 @@ def test_claims_returns_multiple_properties_and_values(
     monkeypatch.setattr(httpx, "get", mock_get)
 
     assert WikiReach().claims("Q937") == {
-        "P31": [Claim("P31", "Q937", {"id": "Q5"}, "wikibase-entityid")],
+        "P31": [Claim("P31", "Q937", EntityValue("Q5", "item"), "wikibase-entityid")],
         "P19": [Claim("P19", "Q937", {"id": "Q1731"}, "unknown")],
         "P106": [
             Claim("P106", "Q937", {"id": "Q169470"}, "unknown"),
@@ -409,6 +416,56 @@ def test_claims_represent_non_value_snaks_as_none(
     assert WikiReach().claims("Q937") == {
         "P19": [Claim("P19", "Q937", None, snak_type)]
     }
+
+
+def test_claims_convert_time_and_quantity_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Supported Wikidata datatypes become typed immutable value models.
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: json_response(
+            {
+                "entities": {
+                    "Q937": {
+                        "claims": {
+                            "P569": [
+                                {
+                                    "mainsnak": {
+                                        "snaktype": "value",
+                                        "datavalue": {
+                                            "type": "time",
+                                            "value": {
+                                                "time": "+1879-03-14T00:00:00Z",
+                                                "precision": 11,
+                                            },
+                                        },
+                                    }
+                                }
+                            ],
+                            "P2048": [
+                                {
+                                    "mainsnak": {
+                                        "snaktype": "value",
+                                        "datavalue": {
+                                            "type": "quantity",
+                                            "value": {"amount": "+42", "unit": "1"},
+                                        },
+                                    }
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
+        ),
+    )
+
+    claims = WikiReach().claims("Q937")
+
+    assert claims["P569"][0].value == DateValue(1879, 3, 14, "day")
+    assert claims["P2048"][0].value == QuantityValue(Decimal("42"))
 
 
 def test_claims_returns_empty_mapping_for_entity_without_claims(

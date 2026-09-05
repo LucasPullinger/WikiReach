@@ -18,6 +18,7 @@ from .exceptions import (
 from .path import PathResult
 from .relation import Relation
 from .traversal import TraversalResult
+from .value import DateValue, EntityValue, QuantityValue
 
 __version__ = "0.1.0"
 
@@ -25,7 +26,9 @@ __all__ = [
     "Entity",
     "Connection",
     "Claim",
+    "DateValue",
     "EntityNotFoundError",
+    "EntityValue",
     "InvalidEntityIdError",
     "InvalidDepthError",
     "InvalidQueryError",
@@ -33,6 +36,7 @@ __all__ = [
     "PathNotFoundError",
     "PathResult",
     "Relation",
+    "QuantityValue",
     "WikiReach",
     "WikiReachError",
     "WikiReachHTTPError",
